@@ -8,6 +8,7 @@ package main // import "code.gitea.io/gitea"
 
 import (
 	"os"
+	"runtime/pprof"
 	"strings"
 
 	"code.gitea.io/gitea/cmd"
@@ -40,7 +41,31 @@ func main() {
 		cmd.CmdCert,
 		cmd.CmdAdmin,
 	}
-	app.Flags = append(app.Flags, []cli.Flag{}...)
+	app.Flags = append(app.Flags, []cli.Flag{cli.StringFlag{
+		Name:  "cpuprofile",
+		Usage: "Write cpu profile to file",
+	}}...)
+
+	app.Before = func(c *cli.Context) error {
+		cpuprofile := c.String("cpuprofile")
+		if cpuprofile != "" {
+			log.Info("Logging CPU profile to : %s", cpuprofile)
+			f, err := os.Create(cpuprofile)
+			if err != nil {
+				log.Fatal(2, "Failed to create cpuprofile (%s): %v", cpuprofile, err)
+			}
+			pprof.StartCPUProfile(f)
+		}
+		return nil
+	}
+	app.After = func(c *cli.Context) error {
+		cpuprofile := c.String("cpuprofile")
+		if cpuprofile != "" {
+			pprof.StopCPUProfile()
+		}
+		return nil
+	}
+
 	err := app.Run(os.Args)
 	if err != nil {
 		log.Fatal(4, "Failed to run app with %s: %v", os.Args, err)
