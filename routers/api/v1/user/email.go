@@ -14,8 +14,18 @@ import (
 )
 
 // ListEmails list all the emails of mine
-// see https://github.com/gogits/go-gogs-client/wiki/Users-Emails#list-email-addresses-for-a-user
 func ListEmails(ctx *context.APIContext) {
+	// swagger:route GET /emails userGetEmails
+	//
+	// List current user emails.
+	//
+	//     Produces:
+	//     - application/json
+	//
+	//     Responses:
+	//       200: EmailList
+	//       500: error
+
 	emails, err := models.GetEmailAddresses(ctx.User.ID)
 	if err != nil {
 		ctx.Error(500, "GetEmailAddresses", err)
@@ -29,8 +39,22 @@ func ListEmails(ctx *context.APIContext) {
 }
 
 // AddEmail add email for me
-// see https://github.com/gogits/go-gogs-client/wiki/Users-Emails#add-email-addresses
 func AddEmail(ctx *context.APIContext, form api.CreateEmailOption) {
+	// swagger:route POST /emails userAddEmails
+	//
+	// Add emails to current user.
+	//
+	//     Consumes:
+	//     - application/json
+	//
+	//     Produces:
+	//     - application/json
+	//
+	//     Responses:
+	//       201: EmailList
+	//       422: validationError
+	//       500: error
+
 	if len(form.Emails) == 0 {
 		ctx.Status(422)
 		return
@@ -62,8 +86,21 @@ func AddEmail(ctx *context.APIContext, form api.CreateEmailOption) {
 }
 
 // DeleteEmail delete email
-// see https://github.com/gogits/go-gogs-client/wiki/Users-Emails#delete-email-addresses
 func DeleteEmail(ctx *context.APIContext, form api.CreateEmailOption) {
+	// swagger:route DELETE	 /emails userDeleteEmails
+	//
+	// Remove email address to current user.
+	//
+	//     Consumes:
+	//     - application/json
+	//
+	//     Produces:
+	//     - application/json
+	//
+	//     Responses:
+	//       204: empty
+	//       500: error
+
 	if len(form.Emails) == 0 {
 		ctx.Status(204)
 		return

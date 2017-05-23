@@ -24,6 +24,62 @@
   },
   "basePath": "/api/v1",
   "paths": {
+    "/emails": {
+      "get": {
+        "produces": [
+          "application/json"
+        ],
+        "summary": "List current user emails.",
+        "operationId": "userGetEmails",
+        "responses": {
+          "200": {
+            "$ref": "#/responses/EmailList"
+          },
+          "500": {
+            "$ref": "#/responses/error"
+          }
+        }
+      },
+      "post": {
+        "consumes": [
+          "application/json"
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "summary": "Add emails to current user.",
+        "operationId": "userAddEmails",
+        "responses": {
+          "201": {
+            "$ref": "#/responses/EmailList"
+          },
+          "422": {
+            "$ref": "#/responses/validationError"
+          },
+          "500": {
+            "$ref": "#/responses/error"
+          }
+        }
+      },
+      "delete": {
+        "consumes": [
+          "application/json"
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "summary": "Remove email address to current user.",
+        "operationId": "userDeleteEmails",
+        "responses": {
+          "204": {
+            "$ref": "#/responses/empty"
+          },
+          "500": {
+            "$ref": "#/responses/error"
+          }
+        }
+      }
+    },
     "/markdown": {
       "post": {
         "consumes": [
@@ -969,15 +1025,12 @@
           "x-go-name": "OpenIssues"
         },
         "owner": {
-          "x-go-name": "Owner",
           "$ref": "#/definitions/User"
         },
         "parent": {
-          "x-go-name": "Parent",
-          "$ref": "#/definitions/Repository"
+          "type": "object"
         },
         "permissions": {
-          "x-go-name": "Permissions",
           "$ref": "#/definitions/Permission"
         },
         "private": {
