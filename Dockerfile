@@ -1,5 +1,5 @@
-FROM alpine:3.5
-MAINTAINER Thomas Boerger <thomas@webhippie.de>
+FROM gitea/gitea-base
+LABEL maintainer "Thomas Boerger <thomas@webhippie.de>"
 
 EXPOSE 22 3000
 
