@@ -1,0 +1,54 @@
+
+.PHONY: build-dep-bindata
+build-dep-bindata:
+	@hash go-bindata > /dev/null 2>&1; if [ $$? -ne 0 ]; then \
+		go get -u github.com/jteeuwen/go-bindata/...; \
+	fi
+
+.PHONY: build-dep-swagger
+build-dep-swagger:
+	@hash swagger > /dev/null 2>&1; if [ $$? -ne 0 ]; then \
+    go get -u github.com/go-swagger/go-swagger/cmd/swagger; \
+  fi
+
+.PHONY: build-dep-errcheck
+build-dep-errcheck:
+	@hash errcheck > /dev/null 2>&1; if [ $$? -ne 0 ]; then \
+		go get -u github.com/kisielk/errcheck; \
+	fi
+
+.PHONY: build-dep-golint
+build-dep-golint:
+	@hash golint > /dev/null 2>&1; if [ $$? -ne 0 ]; then \
+		go get -u github.com/golang/lint/golint; \
+	fi
+
+.PHONY: build-dep-misspell
+build-dep-misspell:
+	@hash misspell > /dev/null 2>&1; if [ $$? -ne 0 ]; then \
+    go get -u github.com/client9/misspell/cmd/misspell; \
+  fi
+
+.PHONY: build-dep-govendor
+build-dep-govendor:
+	@hash govendor > /dev/null 2>&1; if [ $$? -ne 0 ]; then \
+		go get -u github.com/kardianos/govendor; \
+	fi
+
+.PHONY: build-dep-xgo
+build-dep-xgo:
+	@hash xgo > /dev/null 2>&1; if [ $$? -ne 0 ]; then \
+		go get -u github.com/karalabe/xgo; \
+	fi
+
+.PHONY: build-dep-lessc
+build-dep-lessc:
+	@which lessc > /dev/null; if [ $$? -ne 0 ]; then \
+		go get -u github.com/kib357/less-go/lessc; \
+	fi
+
+.PHONY: build-dep-gocovmerge
+build-dep-gocovmerge:
+	@which gocovmerge > /dev/null; if [ $$? -ne 0 ]; then \
+		go get -u github.com/wadey/gocovmerge; \
+	fi

@@ -47,6 +47,8 @@ else
 	endif
 endif
 
+include Makefile.deps
+
 .PHONY: all
 all: build
 
@@ -67,47 +69,29 @@ vet:
 	go vet $(PACKAGES)
 
 .PHONY: generate
-generate:
-	@hash go-bindata > /dev/null 2>&1; if [ $$? -ne 0 ]; then \
-		go get -u github.com/jteeuwen/go-bindata/...; \
-	fi
+generate: build-dep-bindata
 	go generate $(PACKAGES)
 
 .PHONY: generate-swagger
-generate-swagger:
-	@hash swagger > /dev/null 2>&1; if [ $$? -ne 0 ]; then \
-		go get -u github.com/go-swagger/go-swagger/cmd/swagger; \
-	fi
+generate-swagger: build-dep-swagger
 	swagger generate spec -o ./public/swagger.v1.json
 	$(SED_INPLACE) "s;\".ref\": \"#/definitions/GPGKey\";\"type\": \"object\";g" ./public/swagger.v1.json
 	$(SED_INPLACE) "s;^          \".ref\": \"#/definitions/Repository\";          \"type\": \"object\";g" ./public/swagger.v1.json
 
 .PHONY: errcheck
-errcheck:
-	@hash errcheck > /dev/null 2>&1; if [ $$? -ne 0 ]; then \
-		go get -u github.com/kisielk/errcheck; \
-	fi
+errcheck: build-dep-errcheck
 	errcheck $(PACKAGES)
 
 .PHONY: lint
-lint:
-	@hash golint > /dev/null 2>&1; if [ $$? -ne 0 ]; then \
-		go get -u github.com/golang/lint/golint; \
-	fi
+lint: build-dep-golint
 	for PKG in $(PACKAGES); do golint -set_exit_status $$PKG || exit 1; done;
 
 .PHONY: misspell-check
-misspell-check:
-	@hash misspell > /dev/null 2>&1; if [ $$? -ne 0 ]; then \
-		go get -u github.com/client9/misspell/cmd/misspell; \
-	fi
+misspell-check: build-dep-misspell
 	misspell -error -i unknwon $(GOFILES)
 
 .PHONY: misspell
-misspell:
-	@hash misspell > /dev/null 2>&1; if [ $$? -ne 0 ]; then \
-		go get -u github.com/client9/misspell/cmd/misspell; \
-	fi
+misspell: build-dep-misspell
 	misspell -w -i unknwon $(GOFILES)
 
 .PHONY: fmt-check
@@ -125,7 +109,7 @@ test: fmt-check
 	go test $(PACKAGES)
 
 .PHONY: test-coverage
-test-coverage: unit-test-coverage integration-test-coverage
+test-coverage: build-dep-gocovmerge unit-test-coverage integration-test-coverage
 	for PKG in $(PACKAGES); do\
 	  touch $$GOPATH/src/$$PKG/coverage.out;\
 	  egrep "$$PKG[^/]*\.go" integration.coverage.out > int.coverage.out;\
@@ -139,10 +123,7 @@ unit-test-coverage:
 	for PKG in $(PACKAGES); do go test -cover -coverprofile $$GOPATH/src/$$PKG/coverage.out $$PKG || exit 1; done;
 
 .PHONY: test-vendor
-test-vendor:
-	@hash govendor > /dev/null 2>&1; if [ $$? -ne 0 ]; then \
-		go get -u github.com/kardianos/govendor; \
-	fi
+test-vendor: build-dep-govendor
 	govendor list +unused | tee "$(TMPDIR)/wc-gitea-unused"
 	[ $$(cat "$(TMPDIR)/wc-gitea-unused" | wc -l) -eq 0 ] || echo "Warning: /!\\ Some vendor are not used /!\\"
 
@@ -216,30 +197,21 @@ release-dirs:
 	mkdir -p $(DIST)/binaries $(DIST)/release
 
 .PHONY: release-windows
-release-windows:
-	@hash xgo > /dev/null 2>&1; if [ $$? -ne 0 ]; then \
-		go get -u github.com/karalabe/xgo; \
-	fi
+release-windows: build-dep-xgo
 	xgo -dest $(DIST)/binaries -tags 'netgo $(TAGS)' -ldflags '-linkmode external -extldflags "-static" $(LDFLAGS)' -targets 'windows/*' -out gitea-$(VERSION) .
 ifeq ($(CI),drone)
 	mv /build/* $(DIST)/binaries
 endif
 
 .PHONY: release-linux
-release-linux:
-	@hash xgo > /dev/null 2>&1; if [ $$? -ne 0 ]; then \
-		go get -u github.com/karalabe/xgo; \
-	fi
+release-linux: build-dep-xgo
 	xgo -dest $(DIST)/binaries -tags 'netgo $(TAGS)' -ldflags '-linkmode external -extldflags "-static" $(LDFLAGS)' -targets 'linux/*' -out gitea-$(VERSION) .
 ifeq ($(CI),drone)
 	mv /build/* $(DIST)/binaries
 endif
 
 .PHONY: release-darwin
-release-darwin:
-	@hash xgo > /dev/null 2>&1; if [ $$? -ne 0 ]; then \
-		go get -u github.com/karalabe/xgo; \
-	fi
+release-darwin: build-dep-xgo
 	xgo -dest $(DIST)/binaries -tags 'netgo $(TAGS)' -ldflags '$(LDFLAGS)' -targets 'darwin/*' -out gitea-$(VERSION) .
 ifeq ($(CI),drone)
 	mv /build/* $(DIST)/binaries
@@ -270,13 +242,10 @@ stylesheets-check: stylesheets
 	fi;
 
 .PHONY: stylesheets
-stylesheets: public/css/index.css
+stylesheets: build-dep-lessc public/css/index.css
 
 .IGNORE: public/css/index.css
 public/css/index.css: $(STYLESHEETS)
-	@which lessc > /dev/null; if [ $$? -ne 0 ]; then \
-		go get -u github.com/kib357/less-go/lessc; \
-	fi
 	lessc -i $< -o $@
 
 .PHONY: swagger-ui
