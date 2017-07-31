@@ -127,6 +127,14 @@ pipeline:
       event: [ push ]
       branch: [ master ]
 
+  docker:
+    image: webhippie/golang:edge
+    commands:
+      - make docker-multi-arch-push-manifest
+    when:
+      event: [ push, tag ]
+      branch: [ master, release/*, refs/tags/* ]
+
   release:
     image: plugins/s3
     path_style: true
