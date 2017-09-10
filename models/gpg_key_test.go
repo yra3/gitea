@@ -184,6 +184,20 @@ Unknown GPG key with good email
 	assert.Error(t, err, "Validate a bad signature with a kay that can not sign")
 }
 
+func TestExtractSignatureIssue2481(t *testing.T) {
+
+	testGoodSigArmor := `-----BEGIN PGP SIGNATURE-----
+Version: GnuPG v1
+
+iD8DBQBZtRWO1sB9pKxWLa0RAiyqAJ9b2jhppgMPcQuBGFqJUcTrGqC03ACfc8k9
+6Sr9qaW035WmIgQ27rnY7tc=
+=Bha/
+-----END PGP SIGNATURE-----`
+
+	_, err := extractSignature(testGoodSigArmor)
+	assert.NoError(t, err, "Could not parse a valid GPG armored signature", testGoodSigArmor)
+}
+
 func TestCheckGPGUserEmail(t *testing.T) {
 	testEmailWithUpperCaseLetters := `-----BEGIN PGP PUBLIC KEY BLOCK-----
 Version: GnuPG v1
