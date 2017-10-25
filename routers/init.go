@@ -17,6 +17,7 @@ import (
 	"code.gitea.io/gitea/modules/log"
 	"code.gitea.io/gitea/modules/mailer"
 	"code.gitea.io/gitea/modules/markup"
+	"code.gitea.io/gitea/modules/plugins"
 	"code.gitea.io/gitea/modules/setting"
 	"code.gitea.io/gitea/modules/ssh"
 
@@ -83,4 +84,8 @@ func GlobalInit() {
 		ssh.Listen(setting.SSH.ListenHost, setting.SSH.ListenPort, setting.SSH.ServerCiphers)
 		log.Info("SSH server started on %s:%d. Cipher list (%v)", setting.SSH.ListenHost, setting.SSH.ListenPort, setting.SSH.ServerCiphers)
 	}
+
+	// TODO settings if setting.StartPlugins {
+	plugins.GetManager()
+	//}
 }

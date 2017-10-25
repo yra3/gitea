@@ -1,8 +1,5 @@
 package shared
 
-
-import	"github.com/hashicorp/go-plugin"
-
 // Handshake is a common handshake that is shared by plugin and host.
 var Handshake = plugin.HandshakeConfig{
 	ProtocolVersion:  1,
@@ -12,23 +9,45 @@ var Handshake = plugin.HandshakeConfig{
 
 // PluginMap is the map of plugins we can dispense.
 var PluginMap = map[string]plugin.Plugin{
-	"init": &Plugin{}, //Mandatory to define what the plugin is capable
+	"plugin": &Plugin{}, //Mandatory to define what the plugin is capable
 	"router": &Router{},
-  "method": &Method{},
+	"method": &Method{},
 }
-
 
 // Plugin is the interface that we're exposing that setup the plugin and inform the main process of capabilities
 type Plugin interface {
 	Details() PluginDetails
-	Capabilities() []string
 }
 
+//PluginDetails give details about the plugins and what it can do.
 type PluginDetails struct {
-	Name string
-	Description string
-	State PluginState // running,
-	Capabilities []string // router, method //TODO define a list
+	Name         string
+	Version      string
+	Description  string
+	State        PluginState
+	Capabilities []PluginCapabilities
 }
 
-type PluginState string  // running //TODO define a list
+//PluginState reprensente the current state of a plugin
+type PluginState int
+
+const (
+	//PluginStateBoot plugin is starting and not ready to do some work
+	PluginStateBoot = PluginState(iota)
+	//PluginStateReady plugin is ready to handle work
+	PluginStateReady
+	//PluginStateWorking plugin is working and maybe need some time to handle the next request
+	PluginStateWorking //Please wait
+	//PluginStateError plugin is in a failed state and should not execute task.
+	PluginStateError
+)
+
+//PluginCapabilities reprensente the capabilities of a plugin
+type PluginCapabilities int // running //TODO define a list
+
+const (
+	//PluginHandleRoute is a router
+	PluginHandleRoute = PluginCapabilities(iota)
+	//PluginHandleMethods can override some methods of gitea
+	PluginHandleMethods
+)
