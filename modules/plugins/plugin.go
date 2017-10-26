@@ -5,6 +5,7 @@
 package plugins
 
 import (
+	"code.gitea.io/gitea/modules/plugins/shared"
 	plugin "github.com/hashicorp/go-plugin"
 )
 
@@ -17,7 +18,7 @@ type Plugin struct {
 }
 
 //GetDetails start the ProtocolClient of a plugin to get details on it.
-func (p *Plugin) GetDetails() (PluginDetails, error) {
+func (p *Plugin) GetDetails() (*shared.PluginDetails, error) {
 
 	// Connect via RPC
 	rpcClient, err := p.Client.Client()
@@ -35,5 +36,6 @@ func (p *Plugin) GetDetails() (PluginDetails, error) {
 	// implementation but is in fact over an RPC connection.
 	plugin := raw.(shared.Plugin)
 
-	return plugin.Details(), nil
+	details := plugin.Details()
+	return &details, nil
 }

@@ -12,6 +12,7 @@ import (
 	plugin "github.com/hashicorp/go-plugin"
 
 	"code.gitea.io/gitea/modules/log"
+	"code.gitea.io/gitea/modules/plugins/shared"
 )
 
 var (
@@ -36,7 +37,7 @@ func GetManager() *Manager {
 }
 
 //Add a plugin to the list
-func (pm *Manager) Add(path string) {
+func (pm *Manager) Add(path string) int64 {
 	pm.mutex.Lock()
 	id := pm.counter
 	pm.Plugins[id] = &Plugin{
@@ -59,6 +60,7 @@ func (pm *Manager) Remove(id int64) error {
 	pm.mutex.Lock()
 	delete(pm.Plugins, id)
 	pm.mutex.Unlock()
+	return nil
 }
 
 //Start a plugin in the list
@@ -89,7 +91,7 @@ func (pm *Manager) Start(id int64) error { //TODO don't use defer on lock
 }
 
 //Stop stop and reset the selected plugin
-func (pm *Manager) Stop(id int64) {
+func (pm *Manager) Stop(id int64) error {
 	pm.mutex.Lock()
 	if _, ok := pm.Plugins[id]; !ok {
 		pm.mutex.Unlock()
@@ -101,6 +103,7 @@ func (pm *Manager) Stop(id int64) {
 		p.Client = nil
 	}
 	pm.mutex.Unlock()
+	return nil
 }
 
 /*

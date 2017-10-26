@@ -5,7 +5,9 @@
 package routers
 
 import (
+	"os"
 	"path"
+	"path/filepath"
 	"strings"
 
 	"code.gitea.io/git"
@@ -86,6 +88,27 @@ func GlobalInit() {
 	}
 
 	// TODO settings if setting.StartPlugins {
-	plugins.GetManager()
+	//TODO define in settings
+	pluginPath := "./plugins"
+	pManager := plugins.GetManager()
+
+	//Create folder if not exist
+	if _, err := os.Stat(pluginPath); os.IsNotExist(err) {
+		os.Mkdir(pluginPath, 0755)
+	}
+
+	err := filepath.Walk(pluginPath, func(path string, f os.FileInfo, err error) error {
+		//log.Debug("Potential plugin found : %v %v %v", path, f, err)
+		if f != nil && !f.IsDir() && f.Mode() == 0755 {
+			log.Debug("Potential plugin found : %s", path)
+			pID := pManager.Add(path)
+			//TODO testing and start via db config / via admin panel
+			pManager.Start(pID)
+		}
+		return nil
+	})
+	if err != nil {
+		log.Fatal(7, "Failed to walk plugin folder '%s' : %v", pluginPath, err)
+	}
 	//}
 }
