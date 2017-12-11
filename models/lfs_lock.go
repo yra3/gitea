@@ -16,23 +16,26 @@ import (
 
 // LFSLock represents a git lfs lock of repository.
 type LFSLock struct {
-	ID      int64     `xorm:"pk autoincr"`
-	RepoID  int64     `xorm:"INDEX NOT NULL"`
-	Owner   *User     `xorm:"-"`
-	OwnerID int64     `xorm:"INDEX NOT NULL"`
-	Path    string    `xorm:"TEXT"`
-	Created time.Time `xorm:"created"`
+	ID      int64       `xorm:"pk autoincr"`
+	Repo    *Repository `xorm:"-"`
+	RepoID  int64       `xorm:"INDEX NOT NULL"`
+	Owner   *User       `xorm:"-"`
+	OwnerID int64       `xorm:"INDEX NOT NULL"`
+	Path    string      `xorm:"TEXT"`
+	Created time.Time   `xorm:"created"`
 }
 
 // BeforeInsert is invoked from XORM before inserting an object of this type.
 func (l *LFSLock) BeforeInsert() {
 	l.OwnerID = l.Owner.ID
+	l.RepoID = l.Repo.ID
 	l.Path = cleanPath(l.Path)
 }
 
 // AfterLoad is invoked from XORM after setting the values of all fields of this object.
 func (l *LFSLock) AfterLoad() {
 	l.Owner, _ = GetUserByID(l.OwnerID)
+	l.Repo, _ = GetRepositoryByID(l.RepoID)
 }
 
 func cleanPath(p string) string {
@@ -53,12 +56,12 @@ func (l *LFSLock) APIFormat() *api.LFSLock {
 
 // CreateLFSLock creates a new lock.
 func CreateLFSLock(lock *LFSLock) (*LFSLock, error) {
-	err := CheckLFSAccessForRepo(lock.Owner, lock.RepoID, "create")
+	err := CheckLFSAccessForRepo(lock.Owner, lock.Repo, true)
 	if err != nil {
 		return nil, err
 	}
 
-	l, err := GetLFSLock(lock.RepoID, lock.Path)
+	l, err := GetLFSLock(lock.Repo, lock.Path)
 	if err == nil {
 		return l, ErrLFSLockAlreadyExist{lock.RepoID, lock.Path}
 	}
@@ -71,15 +74,15 @@ func CreateLFSLock(lock *LFSLock) (*LFSLock, error) {
 }
 
 // GetLFSLock returns release by given path.
-func GetLFSLock(repoID int64, path string) (*LFSLock, error) {
+func GetLFSLock(repo *Repository, path string) (*LFSLock, error) {
 	path = cleanPath(path)
-	rel := &LFSLock{RepoID: repoID}
+	rel := &LFSLock{RepoID: repo.ID}
 	has, err := x.Where("lower(path) = ?", strings.ToLower(path)).Get(rel)
 	if err != nil {
 		return nil, err
 	}
 	if !has {
-		return nil, ErrLFSLockNotExist{0, repoID, path}
+		return nil, ErrLFSLockNotExist{0, repo.ID, path}
 	}
 	return rel, nil
 }
@@ -109,7 +112,7 @@ func DeleteLFSLockByID(id int64, u *User, force bool) (*LFSLock, error) {
 		return nil, err
 	}
 
-	err = CheckLFSAccessForRepo(u, lock.RepoID, "delete")
+	err = CheckLFSAccessForRepo(u, lock.Repo, true)
 	if err != nil {
 		return nil, err
 	}
@@ -123,24 +126,20 @@ func DeleteLFSLockByID(id int64, u *User, force bool) (*LFSLock, error) {
 }
 
 //CheckLFSAccessForRepo check needed access mode base on action
-func CheckLFSAccessForRepo(u *User, repoID int64, action string) error {
+func CheckLFSAccessForRepo(u *User, repo *Repository, reqWrt bool) error {
 	if u == nil {
-		return ErrLFSLockUnauthorizedAction{repoID, "undefined", action}
+		return ErrLFSUnauthorizedAction{repo.ID, "undefined", reqWrt}
 	}
 	mode := AccessModeRead
-	if action == "create" || action == "delete" || action == "verify" {
+	if reqWrt {
 		mode = AccessModeWrite
 	}
 
-	repo, err := GetRepositoryByID(repoID)
-	if err != nil {
-		return err
-	}
 	has, err := HasAccess(u.ID, repo, mode)
 	if err != nil {
 		return err
 	} else if !has {
-		return ErrLFSLockUnauthorizedAction{repo.ID, u.DisplayName(), action}
+		return ErrLFSUnauthorizedAction{repo.ID, u.DisplayName(), reqWrt}
 	}
 	return nil
 }
