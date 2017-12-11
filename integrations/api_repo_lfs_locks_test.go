@@ -44,7 +44,7 @@ func TestAPILFSLocksNotLogin(t *testing.T) {
 	resp := MakeRequest(t, req, http.StatusUnauthorized)
 	var lfsLockError api.LFSLockError
 	DecodeJSON(t, resp, &lfsLockError)
-	assert.Equal(t, "You must have pull access to list locks : User undefined doesn't have rigth to list for lfs lock [rid: 1]", lfsLockError.Message)
+	assert.Equal(t, "Unauthorized", lfsLockError.Message)
 }
 
 func TestAPILFSLocksLogged(t *testing.T) {
