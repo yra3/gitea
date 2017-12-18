@@ -12,6 +12,7 @@ import (
 	"time"
 
 	api "code.gitea.io/sdk/gitea"
+	"github.com/ngaut/log"
 )
 
 // LFSLock represents a git lfs lock of repository.
@@ -34,11 +35,12 @@ func (l *LFSLock) BeforeInsert() {
 
 // AfterLoad is invoked from XORM after setting the values of all fields of this object.
 func (l *LFSLock) AfterLoad() {
+	var err error
 	l.Owner, err = GetUserByID(l.OwnerID)
 	if err != nil {
 		log.Error(2, "LFS lock AfterLoad failed OwnerId[%d] not found: %v", l.OwnerID, err)
 	}
-	l.Repo, _ = GetRepositoryByID(l.RepoID)
+	l.Repo, err = GetRepositoryByID(l.RepoID)
 	if err != nil {
 		log.Error(2, "LFS lock AfterLoad failed RepoId[%d] not found: %v", l.RepoID, err)
 	}
@@ -140,7 +142,7 @@ func CheckLFSAccessForRepo(u *User, repo *Repository, mode AccessMode) error {
 	if err != nil {
 		return err
 	} else if !has {
-		return ErrLFSUnauthorizedAction{repo.ID, u.DisplayName(), reqWrt}
+		return ErrLFSUnauthorizedAction{repo.ID, u.DisplayName(), mode}
 	}
 	return nil
 }

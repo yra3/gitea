@@ -72,7 +72,7 @@ func GetListLockHandler(ctx *context.Context) {
 	}
 	ctx.Resp.Header().Set("Content-Type", metaMediaType)
 
-	err := models.CheckLFSAccessForRepo(ctx.User, ctx.Repo.Repository, true)
+	err := models.CheckLFSAccessForRepo(ctx.User, ctx.Repo.Repository, models.AccessModeRead)
 	if err != nil {
 		if models.IsErrLFSUnauthorizedAction(err) {
 			ctx.Resp.Header().Set("WWW-Authenticate", "Basic realm=gitea-lfs")
@@ -180,7 +180,7 @@ func VerifyLockHandler(ctx *context.Context) {
 
 	ctx.Resp.Header().Set("Content-Type", metaMediaType)
 
-	err := models.CheckLFSAccessForRepo(ctx.User, ctx.Repo.Repository, true)
+	err := models.CheckLFSAccessForRepo(ctx.User, ctx.Repo.Repository, models.AccessModeWrite)
 	if err != nil {
 		if models.IsErrLFSUnauthorizedAction(err) {
 			ctx.Resp.Header().Set("WWW-Authenticate", "Basic realm=gitea-lfs")
