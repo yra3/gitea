@@ -6,6 +6,7 @@ package integrations
 
 import (
 	"context"
+	"fmt"
 	"io/ioutil"
 	"math/rand"
 	"net"
@@ -45,6 +46,44 @@ func onGiteaWebRun(t *testing.T, callback func(*testing.T, *url.URL)) {
 	callback(t, u)
 }
 
+func generateCommit(repoPath, email, fullName string) error {
+	//Generate random file
+	data := make([]byte, 1024)
+	_, err := rand.Read(data)
+	if err != nil {
+		return err
+	}
+	tmpFile, err := ioutil.TempFile(repoPath, "data-file-")
+	if err != nil {
+		return err
+	}
+	defer tmpFile.Close()
+	_, err = tmpFile.Write(data)
+	if err != nil {
+		return err
+	}
+
+	//Commit
+	err = git.AddChanges(repoPath, false, filepath.Base(tmpFile.Name()))
+	if err != nil {
+		return err
+	}
+	err = git.CommitChanges(repoPath, git.CommitChangesOptions{
+		Committer: &git.Signature{
+			Email: email,
+			Name:  fullName,
+			When:  time.Now(),
+		},
+		Author: &git.Signature{
+			Email: email,
+			Name:  fullName,
+			When:  time.Now(),
+		},
+		Message: fmt.Sprintf("Testing commit @ %v", time.Now()),
+	})
+	return err
+}
+
 func TestGit(t *testing.T) {
 	prepareTestEnv(t)
 
@@ -55,7 +94,6 @@ func TestGit(t *testing.T) {
 		u.Path = "user2/repo1.git"
 
 		t.Run("Standard", func(t *testing.T) {
-
 			t.Run("CloneNoLogin", func(t *testing.T) {
 				dstLocalPath, err := ioutil.TempDir("", "repo1")
 				assert.NoError(t, err)
@@ -88,32 +126,8 @@ func TestGit(t *testing.T) {
 			})
 
 			t.Run("PushCommit", func(t *testing.T) {
-				data := make([]byte, 1024)
-				_, err := rand.Read(data)
+				err = generateCommit(dstPath, "user2@example.com", "User Two")
 				assert.NoError(t, err)
-				tmpFile, err := ioutil.TempFile(dstPath, "data-file-")
-				defer tmpFile.Close()
-				_, err = tmpFile.Write(data)
-				assert.NoError(t, err)
-
-				//Commit
-				err = git.AddChanges(dstPath, false, filepath.Base(tmpFile.Name()))
-				assert.NoError(t, err)
-				err = git.CommitChanges(dstPath, git.CommitChangesOptions{
-					Committer: &git.Signature{
-						Email: "user2@example.com",
-						Name:  "User Two",
-						When:  time.Now(),
-					},
-					Author: &git.Signature{
-						Email: "user2@example.com",
-						Name:  "User Two",
-						When:  time.Now(),
-					},
-					Message: "Testing commit",
-				})
-				assert.NoError(t, err)
-
 				//Push
 				err = git.Push(dstPath, git.PushOptions{
 					Branch: "master",
@@ -125,39 +139,15 @@ func TestGit(t *testing.T) {
 		})
 		t.Run("LFS", func(t *testing.T) {
 			t.Run("PushCommit", func(t *testing.T) {
-				/* Generate random file */
-				data := make([]byte, 1024)
-				_, err := rand.Read(data)
-				assert.NoError(t, err)
-				tmpFile, err := ioutil.TempFile(dstPath, "data-file-")
-				defer tmpFile.Close()
-				_, err = tmpFile.Write(data)
-				assert.NoError(t, err)
-
 				//Setup git LFS
 				_, err = git.NewCommand("lfs").AddArguments("install").RunInDir(dstPath)
 				assert.NoError(t, err)
 				_, err = git.NewCommand("lfs").AddArguments("track", "data-file-*").RunInDir(dstPath)
 				assert.NoError(t, err)
-
-				//Commit
-				err = git.AddChanges(dstPath, false, ".gitattributes", filepath.Base(tmpFile.Name()))
-				assert.NoError(t, err)
-				err = git.CommitChanges(dstPath, git.CommitChangesOptions{
-					Committer: &git.Signature{
-						Email: "user2@example.com",
-						Name:  "User Two",
-						When:  time.Now(),
-					},
-					Author: &git.Signature{
-						Email: "user2@example.com",
-						Name:  "User Two",
-						When:  time.Now(),
-					},
-					Message: "Testing LFS ",
-				})
+				err = git.AddChanges(dstPath, false, ".gitattributes")
 				assert.NoError(t, err)
 
+				err = generateCommit(dstPath, "user2@example.com", "User Two")
 				//Push
 				u.User = url.UserPassword("user2", userPassword)
 				err = git.Push(dstPath, git.PushOptions{
