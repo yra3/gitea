@@ -34,8 +34,14 @@ func (l *LFSLock) BeforeInsert() {
 
 // AfterLoad is invoked from XORM after setting the values of all fields of this object.
 func (l *LFSLock) AfterLoad() {
-	l.Owner, _ = GetUserByID(l.OwnerID)
+	l.Owner, err = GetUserByID(l.OwnerID)
+	if err != nil {
+		log.Error(2, "LFS lock AfterLoad failed OwnerId[%d] not found: %v", l.OwnerID, err)
+	}
 	l.Repo, _ = GetRepositoryByID(l.RepoID)
+	if err != nil {
+		log.Error(2, "LFS lock AfterLoad failed RepoId[%d] not found: %v", l.RepoID, err)
+	}
 }
 
 func cleanPath(p string) string {
@@ -56,7 +62,7 @@ func (l *LFSLock) APIFormat() *api.LFSLock {
 
 // CreateLFSLock creates a new lock.
 func CreateLFSLock(lock *LFSLock) (*LFSLock, error) {
-	err := CheckLFSAccessForRepo(lock.Owner, lock.Repo, true)
+	err := CheckLFSAccessForRepo(lock.Owner, lock.Repo, AccessModeWrite)
 	if err != nil {
 		return nil, err
 	}
@@ -112,7 +118,7 @@ func DeleteLFSLockByID(id int64, u *User, force bool) (*LFSLock, error) {
 		return nil, err
 	}
 
-	err = CheckLFSAccessForRepo(u, lock.Repo, true)
+	err = CheckLFSAccessForRepo(u, lock.Repo, AccessModeWrite)
 	if err != nil {
 		return nil, err
 	}
@@ -126,15 +132,10 @@ func DeleteLFSLockByID(id int64, u *User, force bool) (*LFSLock, error) {
 }
 
 //CheckLFSAccessForRepo check needed access mode base on action
-func CheckLFSAccessForRepo(u *User, repo *Repository, reqWrt bool) error {
+func CheckLFSAccessForRepo(u *User, repo *Repository, mode AccessMode) error {
 	if u == nil {
-		return ErrLFSUnauthorizedAction{repo.ID, "undefined", reqWrt}
+		return ErrLFSUnauthorizedAction{repo.ID, "undefined", mode}
 	}
-	mode := AccessModeRead
-	if reqWrt {
-		mode = AccessModeWrite
-	}
-
 	has, err := HasAccess(u.ID, repo, mode)
 	if err != nil {
 		return err
