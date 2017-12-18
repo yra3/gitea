@@ -534,7 +534,7 @@ func (err ErrLFSLockNotExist) Error() string {
 type ErrLFSUnauthorizedAction struct {
 	RepoID       int64
 	UserName     string
-	RequireWrite bool
+	Mode         AccessMode
 }
 
 // IsErrLFSUnauthorizedAction checks if an error is a ErrLFSUnauthorizedAction.
@@ -544,7 +544,7 @@ func IsErrLFSUnauthorizedAction(err error) bool {
 }
 
 func (err ErrLFSUnauthorizedAction) Error() string {
-	if err.RequireWrite {
+	if err.Mode == AccessModeWrite {
 		return fmt.Sprintf("User %s doesn't have write access for lfs lock [rid: %d]", err.UserName, err.RepoID)
 	}
 	return fmt.Sprintf("User %s doesn't have read access for lfs lock [rid: %d]", err.UserName, err.RepoID)
