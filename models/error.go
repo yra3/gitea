@@ -532,9 +532,9 @@ func (err ErrLFSLockNotExist) Error() string {
 
 // ErrLFSUnauthorizedAction represents a "LFSUnauthorizedAction" kind of error.
 type ErrLFSUnauthorizedAction struct {
-	RepoID       int64
-	UserName     string
-	Mode         AccessMode
+	RepoID   int64
+	UserName string
+	Mode     AccessMode
 }
 
 // IsErrLFSUnauthorizedAction checks if an error is a ErrLFSUnauthorizedAction.
