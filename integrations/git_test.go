@@ -7,11 +7,6 @@ package integrations
 import (
 	"context"
 	"crypto/rand"
-	"crypto/rsa"
-	"crypto/x509"
-	"encoding/asn1"
-	"encoding/base64"
-	"encoding/pem"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -26,6 +21,7 @@ import (
 	"code.gitea.io/git"
 	"code.gitea.io/gitea/models"
 	"code.gitea.io/gitea/modules/setting"
+	"code.gitea.io/gitea/modules/ssh"
 	api "code.gitea.io/sdk/gitea"
 
 	"github.com/Unknwon/com"
@@ -49,6 +45,7 @@ func onGiteaRun(t *testing.T, callback func(*testing.T, *url.URL)) {
 	}()
 
 	go s.Serve(listener)
+	go ssh.Listen(setting.SSH.ListenHost, setting.SSH.ListenPort, setting.SSH.ServerCiphers, setting.SSH.ServerKeyExchanges, setting.SSH.ServerMACs)
 
 	//TODO add SSH internal server
 
@@ -185,84 +182,78 @@ func TestGit(t *testing.T) {
 			//Setup remote link
 			u.Scheme = "ssh"
 			u.User = url.User("git")
-			u.Host = "localhost:22" //TODO setup port
-			log.Println(u.String())
+			u.Host = fmt.Sprintf("%s:%d", setting.SSH.ListenHost, setting.SSH.ListenPort)
+			u.Path = "user2/repo-tmp-18.git"
+			log.Println(u.String()) //TODO remove debug
 
 			//Setup key
+			keyFolder, err := ioutil.TempDir("", "tmp-key-folder")
+			assert.NoError(t, err)
+			defer os.RemoveAll(keyFolder)
+			_, _, err = com.ExecCmd("ssh-keygen", "-f", filepath.Join(keyFolder, "my-testing-key"), "-t", "rsa", "-N", "")
+			assert.NoError(t, err)
+
 			session := loginUser(t, "user1")
 			keyOwner := models.AssertExistsAndLoadBean(t, &models.User{Name: "user2"}).(*models.User)
 			urlStr := fmt.Sprintf("/api/v1/admin/users/%s/keys", keyOwner.Name)
 
-			key, err := rsa.GenerateKey(rand.Reader, 2048)
+			dataPubKey, err := ioutil.ReadFile(filepath.Join(keyFolder, "my-testing-key.pub"))
 			assert.NoError(t, err)
-			keyPath, err := ioutil.TempFile("", "user-tmp-key")
-			assert.NoError(t, err)
-			saveKey(t, keyPath.Name(), key)
-			defer os.Remove(keyPath.Name())
-			savePubKey(t, keyPath.Name()+".pub", key.PublicKey)
-			defer os.Remove(keyPath.Name())
-
-			dataPubKey, err := ioutil.ReadFile(keyPath.Name() + ".pub")
-			assert.NoError(t, err)
-			fmt.Print(string(dataPubKey))
+			fmt.Print(string(dataPubKey)) //TODO remove debug
 			req := NewRequestWithValues(t, "POST", urlStr, map[string]string{
 				"key":   string(dataPubKey),
 				"title": "test-key",
 			})
-			//resp :=
 			session.MakeRequest(t, req, http.StatusCreated)
+
+			//Setup ssh wrapper
+			sshWrapper, err := ioutil.TempFile("./integrations/", "tmp-ssh-wrapper")
+			sshWrapper.WriteString("#!/bin/sh\n\n")
+			sshWrapper.WriteString("ssh -i \"" + filepath.Join(keyFolder, "my-testing-key") + "\" $* \n\n")
+			err = sshWrapper.Chmod(os.ModePerm)
+			assert.NoError(t, err)
+			sshWrapper.Close()
 
 			//Setup clone folder
 			dstPath, err := ioutil.TempDir("", "repo-tmp-18")
 			assert.NoError(t, err)
 			defer os.RemoveAll(dstPath)
+
+			t.Run("Standard", func(t *testing.T) {
+				t.Run("CreateRepo", func(t *testing.T) {
+					session := loginUser(t, "user2")
+					req := NewRequestWithJSON(t, "POST", "/api/v1/user/repos", &api.CreateRepoOption{
+						AutoInit:    true,
+						Description: "Temporary repo",
+						Name:        "repo-tmp-18",
+						Private:     false,
+						Gitignores:  "",
+						License:     "WTFPL",
+						Readme:      "Default",
+					})
+					session.MakeRequest(t, req, http.StatusCreated)
+				})
+
+				t.Run("Clone", func(t *testing.T) {
+					err = git.Clone(u.String(), dstPath, git.CloneRepoOptions{})
+					_, err = git.NewCommand("clone").AddArguments("--config", "core.sshCommand=./"+sshWrapper.Name(), u.String(), dstPath).Run() //TODO improve wrapper and add to make clean
+					assert.NoError(t, err)
+					assert.True(t, com.IsExist(filepath.Join(dstPath, "README.md")))
+				})
+				//time.Sleep(5 * time.Minute)
+				t.Run("PushCommit", func(t *testing.T) {
+					err = generateCommit(dstPath, "user2@example.com", "User Two")
+					assert.NoError(t, err)
+					//Push
+					err = git.Push(dstPath, git.PushOptions{
+						Branch: "master",
+						Remote: u.String(),
+						Force:  false,
+					})
+					assert.NoError(t, err)
+				})
+			})
+
 		})
 	})
 }
-
-//From https://gist.github.com/sdorra/1c95de8cb80da31610d2ad767cd6f251
-func savePubKey(t *testing.T, fileName string, pubkey rsa.PublicKey) {
-	asn1Bytes, err := asn1.Marshal(pubkey)
-	assert.NoError(t, err)
-
-	f, err := os.Create(fileName)
-	defer f.Close()
-	assert.NoError(t, err)
-
-	f.WriteString("ssh-rsa ")
-	b64 := base64.NewEncoder(base64.StdEncoding, f)
-	defer b64.Close()
-	_, err = b64.Write(asn1Bytes)
-	assert.NoError(t, err)
-
-}
-
-func saveKey(t *testing.T, fileName string, key *rsa.PrivateKey) {
-	outFile, err := os.Create(fileName)
-	assert.NoError(t, err)
-	defer outFile.Close()
-
-	var privateKey = &pem.Block{
-		Type:  "PRIVATE KEY",
-		Bytes: x509.MarshalPKCS1PrivateKey(key),
-	}
-
-	err = pem.Encode(outFile, privateKey)
-	assert.NoError(t, err)
-}
-
-/*
-
-
-// user1 is an admin user
-session := loginUser(t, "user1")
-keyOwner := models.AssertExistsAndLoadBean(t, &models.User{Name: "user2"}).(*models.User)
-
-urlStr := fmt.Sprintf("/api/v1/admin/users/%s/keys", keyOwner.Name)
-req := NewRequestWithValues(t, "POST", urlStr, map[string]string{
-	"key":   "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAAgQDAu7tvIvX6ZHrRXuZNfkR3XLHSsuCK9Zn3X58lxBcQzuo5xZgB6vRwwm/QtJuF+zZPtY5hsQILBLmF+BZ5WpKZp1jBeSjH2G7lxet9kbcH+kIVj0tPFEoyKI9wvWqIwC4prx/WVk2wLTJjzBAhyNxfEq7C9CeiX9pQEbEqJfkKCQ== nocomment\n",
-	"title": "test-key",
-})
-resp := session.MakeRequest(t, req, http.StatusCreated)
-
-*/
