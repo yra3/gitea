@@ -8,7 +8,7 @@
 //
 //     Schemes: http, https
 //     BasePath: /api/v1
-//     Version: 1.1.1
+//     Version: master
 //     License: MIT http://opensource.org/licenses/MIT
 //
 //     Consumes:

@@ -21,7 +21,8 @@ GOFMT ?= gofmt -s
 GOFLAGS := -i -v
 EXTRA_GOFLAGS ?=
 
-LDFLAGS := -X "main.Version=$(shell git describe --tags --always | sed 's/-/+/' | sed 's/^v//')" -X "main.Tags=$(TAGS)"
+VERSION := $(shell git describe --tags --always | sed 's/-/+/' | sed 's/^v//')
+LDFLAGS := -X "main.Version=$(VERSION)" -X "main.Tags=$(TAGS)"
 
 PACKAGES ?= $(filter-out code.gitea.io/gitea/integrations,$(shell $(GO) list ./... | grep -v /vendor/))
 SOURCES ?= $(shell find . -name "*.go" -type f)
@@ -90,6 +91,8 @@ generate-swagger:
 		$(GO) get -u github.com/go-swagger/go-swagger/cmd/swagger; \
 	fi
 	swagger generate spec -o ./public/swagger.v1.json
+	@$(SED_INPLACE) "s;\"version\": \"master\";\"version\": \"$(VERSION)\";g" ./public/swagger.v1.json
+
 
 .PHONY: errcheck
 errcheck:
