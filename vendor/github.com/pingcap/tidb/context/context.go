@@ -17,15 +17,26 @@ import (
 	"fmt"
 
 	"github.com/pingcap/tidb/kv"
+	"github.com/pingcap/tidb/sessionctx/variable"
+	"github.com/pingcap/tidb/util"
+	goctx "golang.org/x/net/context"
 )
 
 // Context is an interface for transaction and executive args environment.
 type Context interface {
-	// GetTxn gets a transaction for futher execution.
-	GetTxn(forceNew bool) (kv.Transaction, error)
+	// NewTxn creates a new transaction for further execution.
+	// If old transaction is valid, it is committed first.
+	// It's used in BEGIN statement and DDL statements to commit old transaction.
+	NewTxn() error
 
-	// FinishTxn commits or rolls back the current transaction.
-	FinishTxn(rollback bool) error
+	// Txn returns the current transaction which is created before executing a statement.
+	Txn() kv.Transaction
+
+	// GoCtx returns the standard context.Context which is bound with current transaction.
+	GoCtx() goctx.Context
+
+	// GetClient gets a kv.Client.
+	GetClient() kv.Client
 
 	// SetValue saves a value associated with this context for key.
 	SetValue(key fmt.Stringer, value interface{})
@@ -35,4 +46,48 @@ type Context interface {
 
 	// ClearValue clears the value associated with this context for key.
 	ClearValue(key fmt.Stringer)
+
+	GetSessionVars() *variable.SessionVars
+
+	GetSessionManager() util.SessionManager
+
+	// RefreshTxnCtx commits old transaction without retry,
+	// and creates a new transaction.
+	// now just for load data and batch insert.
+	RefreshTxnCtx() error
+
+	// ActivePendingTxn receives the pending transaction from the transaction channel.
+	// It should be called right before we builds an executor.
+	ActivePendingTxn() error
+
+	// InitTxnWithStartTS initializes a transaction with startTS.
+	// It should be called right before we builds an executor.
+	InitTxnWithStartTS(startTS uint64) error
+
+	// GetStore returns the store of session.
+	GetStore() kv.Storage
 }
+
+type basicCtxType int
+
+func (t basicCtxType) String() string {
+	switch t {
+	case QueryString:
+		return "query_string"
+	case Initing:
+		return "initing"
+	case LastExecuteDDL:
+		return "last_execute_ddl"
+	}
+	return "unknown"
+}
+
+// Context keys.
+const (
+	// QueryString is the key for original query string.
+	QueryString basicCtxType = 1
+	// Initing is the key for indicating if the server is running bootstrap or upgrade job.
+	Initing basicCtxType = 2
+	// LastExecuteDDL is the key for whether the session execute a ddl command last time.
+	LastExecuteDDL basicCtxType = 3
+)

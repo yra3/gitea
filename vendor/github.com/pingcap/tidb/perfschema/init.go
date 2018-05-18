@@ -14,16 +14,13 @@
 package perfschema
 
 import (
-	"github.com/juju/errors"
-	"github.com/pingcap/tidb/kv"
-	"github.com/pingcap/tidb/meta"
 	"github.com/pingcap/tidb/meta/autoid"
 	"github.com/pingcap/tidb/model"
 	"github.com/pingcap/tidb/mysql"
 	"github.com/pingcap/tidb/table"
 	"github.com/pingcap/tidb/table/tables"
+	"github.com/pingcap/tidb/types"
 	"github.com/pingcap/tidb/util/charset"
-	"github.com/pingcap/tidb/util/types"
 )
 
 type columnInfo struct {
@@ -32,6 +29,16 @@ type columnInfo struct {
 	flag  uint
 	deflt interface{}
 	elems []string
+}
+
+var globalStatusCols = []columnInfo{
+	{mysql.TypeString, 64, mysql.NotNullFlag, `%`, nil},
+	{mysql.TypeString, 1024, 0, `%`, nil},
+}
+
+var sessionStatusCols = []columnInfo{
+	{mysql.TypeString, 64, mysql.NotNullFlag, `%`, nil},
+	{mysql.TypeString, 1024, 0, `%`, nil},
 }
 
 var setupActorsCols = []columnInfo{
@@ -190,60 +197,24 @@ var stagesCurrentCols = []columnInfo{
 	{mysql.TypeEnum, -1, 0, nil, []string{"TRANSACTION", "STATEMENT", "STAGE"}},
 }
 
-func setColumnID(meta *model.TableInfo, store kv.Storage) error {
-	var err error
-	for _, c := range meta.Columns {
-		c.ID, err = genGlobalID(store)
-		if err != nil {
-			return errors.Trace(err)
-		}
-	}
-	return nil
-}
-
-func genGlobalID(store kv.Storage) (int64, error) {
-	var globalID int64
-	err := kv.RunInNewTxn(store, true, func(txn kv.Transaction) error {
-		var err error
-		globalID, err = meta.NewMeta(txn).GenGlobalID()
-		return errors.Trace(err)
-	})
-	return globalID, errors.Trace(err)
-}
-
-func createMemoryTable(meta *model.TableInfo, alloc autoid.Allocator) (table.Table, error) {
-	tbl, _ := tables.MemoryTableFromMeta(alloc, meta)
-	return tbl, nil
-}
-
-func (ps *perfSchema) buildTables() error {
+func (ps *PerfSchema) buildTables() {
 	tbls := make([]*model.TableInfo, 0, len(ps.tables))
-	ps.mTables = make(map[string]table.Table, len(ps.tables))
-	dbID, err := genGlobalID(ps.store)
-	if err != nil {
-		return errors.Trace(err)
-	}
-	// Set PKIsHandle
-	// TableStmtsCurrent use THREAD_ID as PK and handle
-	tb := ps.tables[TableStmtsHistory]
-	tb.PKIsHandle = true
-	tb.Columns[0].Flag = tb.Columns[0].Flag | mysql.PriKeyFlag
+	dbID := autoid.GenLocalSchemaID()
 
-	var tbl table.Table
 	for name, meta := range ps.tables {
 		tbls = append(tbls, meta)
-		meta.ID, err = genGlobalID(ps.store)
-		if err != nil {
-			return errors.Trace(err)
-		}
-		err = setColumnID(meta, ps.store)
-		if err != nil {
-			return errors.Trace(err)
+		meta.ID = autoid.GenLocalSchemaID()
+		for _, c := range meta.Columns {
+			c.ID = autoid.GenLocalSchemaID()
 		}
 		alloc := autoid.NewMemoryAllocator(dbID)
-		tbl, err = createMemoryTable(meta, alloc)
-		if err != nil {
-			return errors.Trace(err)
+		var tbl table.Table
+		switch name {
+		//@TODO in the future, we need to add many VirtualTable, we may need to add new type for these tables.
+		case TableSessionStatus, TableGlobalStatus:
+			tbl = createVirtualTable(meta, name)
+		default:
+			tbl = tables.MemoryTableFromMeta(alloc, meta)
 		}
 		ps.mTables[name] = tbl
 	}
@@ -254,10 +225,9 @@ func (ps *perfSchema) buildTables() error {
 		Collate: mysql.DefaultCollationName,
 		Tables:  tbls,
 	}
-	return nil
 }
 
-func (ps *perfSchema) buildModel(tbName string, colNames []string, cols []columnInfo) {
+func (ps *PerfSchema) buildModel(tbName string, colNames []string, cols []columnInfo) {
 	rcols := make([]*model.ColumnInfo, len(cols))
 	for i, col := range cols {
 		var ci *model.ColumnInfo
@@ -271,8 +241,8 @@ func (ps *perfSchema) buildModel(tbName string, colNames []string, cols []column
 
 	ps.tables[tbName] = &model.TableInfo{
 		Name:    model.NewCIStr(tbName),
-		Charset: "utf8",
-		Collate: "utf8",
+		Charset: charset.CharsetBin,
+		Collate: charset.CollationBin,
 		Columns: rcols,
 	}
 }
@@ -293,7 +263,7 @@ func buildUsualColumnInfo(offset int, name string, tp byte, size int, flag uint,
 		Collate: mCollation,
 		Tp:      tp,
 		Flen:    size,
-		Flag:    uint(flag),
+		Flag:    flag,
 	}
 	colInfo := &model.ColumnInfo{
 		Name:         model.NewCIStr(name),
@@ -315,7 +285,7 @@ func buildEnumColumnInfo(offset int, name string, elems []string, flag uint, def
 		Charset: mCharset,
 		Collate: mCollation,
 		Tp:      mysql.TypeEnum,
-		Flag:    uint(flag),
+		Flag:    flag,
 		Elems:   elems,
 	}
 	colInfo := &model.ColumnInfo{
@@ -328,26 +298,13 @@ func buildEnumColumnInfo(offset int, name string, elems []string, flag uint, def
 	return colInfo
 }
 
-func (ps *perfSchema) initRecords(tbName string, records [][]types.Datum) error {
-	tbl, ok := ps.mTables[tbName]
-	if !ok {
-		return errors.Errorf("Unknown PerformanceSchema table: %s", tbName)
-	}
-	for _, rec := range records {
-		_, err := tbl.AddRecord(nil, rec)
-		if err != nil {
-			return errors.Trace(err)
-		}
-	}
-	return nil
-}
-
-var setupTimersRecords [][]types.Datum
-
-func (ps *perfSchema) initialize() (err error) {
+func (ps *PerfSchema) initialize() {
 	ps.tables = make(map[string]*model.TableInfo)
+	ps.mTables = make(map[string]table.Table, len(ps.tables))
 
 	allColDefs := [][]columnInfo{
+		globalStatusCols,
+		sessionStatusCols,
 		setupActorsCols,
 		setupObjectsCols,
 		setupInstrumentsCols,
@@ -366,6 +323,8 @@ func (ps *perfSchema) initialize() (err error) {
 	}
 
 	allColNames := [][]string{
+		ColumnGlobalStatus,
+		ColumnSessionStatus,
 		ColumnSetupActors,
 		ColumnSetupObjects,
 		ColumnSetupInstruments,
@@ -387,75 +346,22 @@ func (ps *perfSchema) initialize() (err error) {
 	for i, def := range allColDefs {
 		ps.buildModel(PerfSchemaTables[i], allColNames[i], def)
 	}
-	err = ps.buildTables()
-	if err != nil {
-		return errors.Trace(err)
-	}
-
-	setupActorsRecords := [][]types.Datum{
-		types.MakeDatums(`%`, `%`, `%`, mysql.Enum{Name: "YES", Value: 1}, mysql.Enum{Name: "YES", Value: 1}),
-	}
-	err = ps.initRecords(TableSetupActors, setupActorsRecords)
-	if err != nil {
-		return errors.Trace(err)
-	}
-
-	setupObjectsRecords := [][]types.Datum{
-		types.MakeDatums(mysql.Enum{Name: "EVENT", Value: 1}, "mysql", `%`, mysql.Enum{Name: "NO", Value: 2}, mysql.Enum{Name: "NO", Value: 2}),
-		types.MakeDatums(mysql.Enum{Name: "EVENT", Value: 1}, "performance_schema", `%`, mysql.Enum{Name: "NO", Value: 2}, mysql.Enum{Name: "NO", Value: 2}),
-		types.MakeDatums(mysql.Enum{Name: "EVENT", Value: 1}, "information_schema", `%`, mysql.Enum{Name: "NO", Value: 2}, mysql.Enum{Name: "NO", Value: 2}),
-		types.MakeDatums(mysql.Enum{Name: "EVENT", Value: 1}, `%`, `%`, mysql.Enum{Name: "YES", Value: 1}, mysql.Enum{Name: "YES", Value: 1}),
-		types.MakeDatums(mysql.Enum{Name: "FUNCTION", Value: 2}, "mysql", `%`, mysql.Enum{Name: "NO", Value: 2}, mysql.Enum{Name: "NO", Value: 2}),
-		types.MakeDatums(mysql.Enum{Name: "FUNCTION", Value: 2}, "performance_schema", `%`, mysql.Enum{Name: "NO", Value: 2}, mysql.Enum{Name: "NO", Value: 2}),
-		types.MakeDatums(mysql.Enum{Name: "FUNCTION", Value: 2}, "information_schema", `%`, mysql.Enum{Name: "NO", Value: 2}, mysql.Enum{Name: "NO", Value: 2}),
-		types.MakeDatums(mysql.Enum{Name: "FUNCTION", Value: 2}, `%`, `%`, mysql.Enum{Name: "YES", Value: 1}, mysql.Enum{Name: "YES", Value: 1}),
-		types.MakeDatums(mysql.Enum{Name: "TABLE", Value: 3}, "mysql", `%`, mysql.Enum{Name: "NO", Value: 2}, mysql.Enum{Name: "NO", Value: 2}),
-		types.MakeDatums(mysql.Enum{Name: "TABLE", Value: 3}, "performance_schema", `%`, mysql.Enum{Name: "NO", Value: 2}, mysql.Enum{Name: "NO", Value: 2}),
-		types.MakeDatums(mysql.Enum{Name: "TABLE", Value: 3}, "information_schema", `%`, mysql.Enum{Name: "NO", Value: 2}, mysql.Enum{Name: "NO", Value: 2}),
-		types.MakeDatums(mysql.Enum{Name: "TABLE", Value: 3}, `%`, `%`, mysql.Enum{Name: "YES", Value: 1}, mysql.Enum{Name: "YES", Value: 1}),
-	}
-	err = ps.initRecords(TableSetupObjects, setupObjectsRecords)
-	if err != nil {
-		return errors.Trace(err)
-	}
-
-	setupConsumersRecords := [][]types.Datum{
-		types.MakeDatums("events_stages_current", mysql.Enum{Name: "NO", Value: 2}),
-		types.MakeDatums("events_stages_history", mysql.Enum{Name: "NO", Value: 2}),
-		types.MakeDatums("events_stages_history_long", mysql.Enum{Name: "NO", Value: 2}),
-		types.MakeDatums("events_statements_current", mysql.Enum{Name: "YES", Value: 1}),
-		types.MakeDatums("events_statements_history", mysql.Enum{Name: "YES", Value: 1}),
-		types.MakeDatums("events_statements_history_long", mysql.Enum{Name: "NO", Value: 2}),
-		types.MakeDatums("events_transactions_current", mysql.Enum{Name: "YES", Value: 1}),
-		types.MakeDatums("events_transactions_history", mysql.Enum{Name: "YES", Value: 1}),
-		types.MakeDatums("events_transactions_history_long", mysql.Enum{Name: "YES", Value: 1}),
-		types.MakeDatums("global_instrumentation", mysql.Enum{Name: "YES", Value: 1}),
-		types.MakeDatums("thread_instrumentation", mysql.Enum{Name: "YES", Value: 1}),
-		types.MakeDatums("statements_digest", mysql.Enum{Name: "YES", Value: 1}),
-	}
-	err = ps.initRecords(TableSetupConsumers, setupConsumersRecords)
-	if err != nil {
-		return errors.Trace(err)
-	}
-
-	setupTimersRecords = [][]types.Datum{
-		types.MakeDatums("stage", mysql.Enum{Name: "NANOSECOND", Value: 1}),
-		types.MakeDatums("statement", mysql.Enum{Name: "NANOSECOND", Value: 1}),
-		types.MakeDatums("transaction", mysql.Enum{Name: "NANOSECOND", Value: 1}),
-	}
-	err = ps.initRecords(TableSetupTimers, setupTimersRecords)
-	if err != nil {
-		return errors.Trace(err)
-	}
-
-	return nil
+	ps.buildTables()
 }
 
-func (ps *perfSchema) GetDBMeta() *model.DBInfo {
+// GetDBMeta returns the DB info.
+func (ps *PerfSchema) GetDBMeta() *model.DBInfo {
 	return ps.dbInfo
 }
 
-func (ps *perfSchema) GetTable(name string) (table.Table, bool) {
+// GetTable returns the table.
+func (ps *PerfSchema) GetTable(name string) (table.Table, bool) {
 	tbl, ok := ps.mTables[name]
+	return tbl, ok
+}
+
+// GetTableMeta returns the table info.
+func (ps *PerfSchema) GetTableMeta(name string) (*model.TableInfo, bool) {
+	tbl, ok := ps.tables[name]
 	return tbl, ok
 }

@@ -14,192 +14,157 @@
 package ddl
 
 import (
-	"fmt"
+	"math"
+	"sync/atomic"
 	"time"
 
 	"github.com/juju/errors"
-	"github.com/pingcap/tidb/context"
 	"github.com/pingcap/tidb/kv"
 	"github.com/pingcap/tidb/meta"
 	"github.com/pingcap/tidb/model"
-	"github.com/pingcap/tidb/terror"
+	"github.com/pingcap/tidb/mysql"
+	"github.com/pingcap/tidb/sessionctx"
+	"github.com/pingcap/tidb/table"
+	"github.com/pingcap/tidb/util/mock"
+	log "github.com/sirupsen/logrus"
 )
 
-var _ context.Context = &reorgContext{}
-
-// reorgContext implements context.Context interface for reorganization use.
-type reorgContext struct {
-	store kv.Storage
-	m     map[fmt.Stringer]interface{}
-	txn   kv.Transaction
+// reorgCtx is for reorganization.
+type reorgCtx struct {
+	// doneCh is used to notify.
+	// If the reorganization job is done, we will use this channel to notify outer.
+	// TODO: Now we use goroutine to simulate reorganization jobs, later we may
+	// use a persistent job list.
+	doneCh chan error
+	// rowCount is used to simulate a job's row count.
+	rowCount int64
+	// notifyCancelReorgJob is used to notify the backfilling goroutine if the DDL job is cancelled.
+	// 0: job is not canceled.
+	// 1: job is canceled.
+	notifyCancelReorgJob int32
+	// doneHandle is used to simulate the handle that has been processed.
+	doneHandle int64
 }
 
-func (c *reorgContext) GetTxn(forceNew bool) (kv.Transaction, error) {
-	if forceNew {
-		if c.txn != nil {
-			if err := c.txn.Commit(); err != nil {
-				return nil, errors.Trace(err)
-			}
-			c.txn = nil
-		}
-	}
-
-	if c.txn != nil {
-		return c.txn, nil
-	}
-
-	txn, err := c.store.Begin()
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-
-	c.txn = txn
-	return c.txn, nil
-}
-
-func (c *reorgContext) FinishTxn(rollback bool) error {
-	if c.txn == nil {
-		return nil
-	}
-
-	var err error
-	if rollback {
-		err = c.txn.Rollback()
-	} else {
-		err = c.txn.Commit()
-	}
-
-	c.txn = nil
-
-	return errors.Trace(err)
-}
-
-func (c *reorgContext) SetValue(key fmt.Stringer, value interface{}) {
-	c.m[key] = value
-}
-
-func (c *reorgContext) Value(key fmt.Stringer) interface{} {
-	return c.m[key]
-}
-
-func (c *reorgContext) ClearValue(key fmt.Stringer) {
-	delete(c.m, key)
-}
-
-func (d *ddl) newReorgContext() context.Context {
-	c := &reorgContext{
-		store: d.store,
-		m:     make(map[fmt.Stringer]interface{}),
-	}
-
+// newContext gets a context. It is only used for adding column in reorganization state.
+func (d *ddl) newContext() sessionctx.Context {
+	c := mock.NewContext()
+	c.Store = d.store
+	c.GetSessionVars().SetStatusFlag(mysql.ServerStatusAutocommit, false)
+	c.GetSessionVars().StmtCtx.TimeZone = time.UTC
 	return c
 }
 
-const waitReorgTimeout = 10 * time.Second
+const defaultWaitReorgTimeout = 10 * time.Second
 
-var errWaitReorgTimeout = errors.New("wait for reorganization timeout")
+// ReorgWaitTimeout is the timeout that wait ddl in write reorganization stage.
+var ReorgWaitTimeout = 1 * time.Second
 
-func (d *ddl) runReorgJob(f func() error) error {
-	if d.reorgDoneCh == nil {
+func (rc *reorgCtx) notifyReorgCancel() {
+	atomic.StoreInt32(&rc.notifyCancelReorgJob, 1)
+}
+
+func (rc *reorgCtx) cleanNotifyReorgCancel() {
+	atomic.StoreInt32(&rc.notifyCancelReorgJob, 0)
+}
+
+func (rc *reorgCtx) isReorgCanceled() bool {
+	return atomic.LoadInt32(&rc.notifyCancelReorgJob) == 1
+}
+
+func (rc *reorgCtx) setRowCount(count int64) {
+	atomic.StoreInt64(&rc.rowCount, count)
+}
+
+func (rc *reorgCtx) setNextHandle(doneHandle int64) {
+	atomic.StoreInt64(&rc.doneHandle, doneHandle)
+}
+
+func (rc *reorgCtx) increaseRowCount(count int64) {
+	atomic.AddInt64(&rc.rowCount, count)
+}
+
+func (rc *reorgCtx) getRowCountAndHandle() (int64, int64) {
+	row := atomic.LoadInt64(&rc.rowCount)
+	handle := atomic.LoadInt64(&rc.doneHandle)
+	return row, handle
+}
+
+func (rc *reorgCtx) clean() {
+	rc.setRowCount(0)
+	rc.setNextHandle(0)
+	rc.doneCh = nil
+}
+
+func (d *ddl) runReorgJob(t *meta.Meta, reorgInfo *reorgInfo, f func() error) error {
+	job := reorgInfo.Job
+	if d.reorgCtx.doneCh == nil {
 		// start a reorganization job
 		d.wait.Add(1)
-		d.reorgDoneCh = make(chan error, 1)
+		d.reorgCtx.doneCh = make(chan error, 1)
+		// initial reorgCtx
+		d.reorgCtx.setRowCount(job.GetRowCount())
+		d.reorgCtx.setNextHandle(reorgInfo.Handle)
 		go func() {
 			defer d.wait.Done()
-			d.reorgDoneCh <- f()
+			d.reorgCtx.doneCh <- f()
 		}()
 	}
 
-	waitTimeout := waitReorgTimeout
+	waitTimeout := defaultWaitReorgTimeout
 	// if d.lease is 0, we are using a local storage,
 	// and we can wait the reorganization to be done here.
 	// if d.lease > 0, we don't need to wait here because
-	// we will wait 2 * lease outer and try checking again,
+	// we should update some job's progress context and try checking again,
 	// so we use a very little timeout here.
 	if d.lease > 0 {
-		waitTimeout = 1 * time.Millisecond
+		waitTimeout = ReorgWaitTimeout
 	}
 
 	// wait reorganization job done or timeout
 	select {
-	case err := <-d.reorgDoneCh:
-		d.reorgDoneCh = nil
+	case err := <-d.reorgCtx.doneCh:
+		rowCount, _ := d.reorgCtx.getRowCountAndHandle()
+		log.Infof("[ddl] run reorg job done, handled %d rows", rowCount)
+		// Update a job's RowCount.
+		job.SetRowCount(rowCount)
+		d.reorgCtx.clean()
 		return errors.Trace(err)
 	case <-d.quitCh:
-		// we return errWaitReorgTimeout here too, so that outer loop will break.
+		log.Info("[ddl] run reorg job ddl quit")
+		d.reorgCtx.setNextHandle(0)
+		d.reorgCtx.setRowCount(0)
+		// We return errWaitReorgTimeout here too, so that outer loop will break.
 		return errWaitReorgTimeout
 	case <-time.After(waitTimeout):
-		// if timeout, we will return, check the owner and retry to wait job done again.
+		rowCount, doneHandle := d.reorgCtx.getRowCountAndHandle()
+		// Update a job's RowCount.
+		job.SetRowCount(rowCount)
+		// Update a reorgInfo's handle.
+		err := t.UpdateDDLReorgHandle(job, doneHandle)
+		log.Infof("[ddl] run reorg job wait timeout %v, handled %d rows, current done handle %d, err %v", waitTimeout, rowCount, doneHandle, err)
+		// If timeout, we will return, check the owner and retry to wait job done again.
 		return errWaitReorgTimeout
 	}
 }
 
-func (d *ddl) isReorgRunnable(txn kv.Transaction) error {
+func (d *ddl) isReorgRunnable() error {
 	if d.isClosed() {
-		// worker is closed, can't run reorganization.
-		return errors.Trace(ErrWorkerClosed)
+		// Worker is closed. So it can't do the reorganizational job.
+		return errInvalidWorker.Gen("worker is closed")
 	}
 
-	t := meta.NewMeta(txn)
-	owner, err := t.GetDDLJobOwner()
-	if err != nil {
-		return errors.Trace(err)
-	} else if owner == nil || owner.OwnerID != d.uuid {
-		// if no owner, we will try later, so here just return error.
-		// or another server is owner, return error too.
-		return errors.Trace(ErrNotOwner)
+	if d.reorgCtx.isReorgCanceled() {
+		// Job is cancelled. So it can't be done.
+		return errCancelledDDLJob
 	}
 
+	if !d.isOwner() {
+		// If it's not the owner, we will try later, so here just returns an error.
+		log.Infof("[ddl] the %s not the job owner", d.uuid)
+		return errors.Trace(errNotOwner)
+	}
 	return nil
-}
-
-func (d *ddl) delKeysWithPrefix(prefix kv.Key) error {
-	for {
-		keys := make([]kv.Key, 0, maxBatchSize)
-		err := kv.RunInNewTxn(d.store, true, func(txn kv.Transaction) error {
-			if err1 := d.isReorgRunnable(txn); err1 != nil {
-				return errors.Trace(err1)
-			}
-
-			iter, err := txn.Seek(prefix)
-			if err != nil {
-				return errors.Trace(err)
-			}
-
-			defer iter.Close()
-			for i := 0; i < maxBatchSize; i++ {
-				if iter.Valid() && iter.Key().HasPrefix(prefix) {
-					keys = append(keys, iter.Key().Clone())
-					err = iter.Next()
-					if err != nil {
-						return errors.Trace(err)
-					}
-				} else {
-					break
-				}
-			}
-
-			for _, key := range keys {
-				err := txn.Delete(key)
-				// must skip ErrNotExist
-				// if key doesn't exist, skip this error.
-				if err != nil && !terror.ErrorEqual(err, kv.ErrNotExist) {
-					return errors.Trace(err)
-				}
-			}
-
-			return nil
-		})
-
-		if err != nil {
-			return errors.Trace(err)
-		}
-
-		// delete no keys, return.
-		if len(keys) == 0 {
-			return nil
-		}
-	}
 }
 
 type reorgInfo struct {
@@ -209,7 +174,9 @@ type reorgInfo struct {
 	first  bool
 }
 
-func (d *ddl) getReorgInfo(t *meta.Meta, job *model.Job) (*reorgInfo, error) {
+var gofailOnceGuard bool
+
+func (d *ddl) getReorgInfo(t *meta.Meta, job *model.Job, tbl table.Table) (*reorgInfo, error) {
 	var err error
 
 	info := &reorgInfo{
@@ -225,7 +192,27 @@ func (d *ddl) getReorgInfo(t *meta.Meta, job *model.Job) (*reorgInfo, error) {
 		if err != nil {
 			return nil, errors.Trace(err)
 		} else if ver.Ver <= 0 {
-			return nil, errors.Errorf("invalid storage current version %d", ver.Ver)
+			return nil, errInvalidStoreVer.Gen("invalid storage current version %d", ver.Ver)
+		}
+
+		// Get the first handle of this table.
+		err = iterateSnapshotRows(d.store, tbl, ver.Ver, math.MinInt64,
+			func(h int64, rowKey kv.Key, rawRecord []byte) (bool, error) {
+				info.Handle = h
+				return false, nil
+			})
+		if err != nil {
+			return info, errors.Trace(err)
+		}
+		// gofail: var errorUpdateReorgHandle bool
+		// if errorUpdateReorgHandle && !gofailOnceGuard {
+		//  // only return error once.
+		//	gofailOnceGuard = true
+		// 	return info, errors.New("occur an error when update reorg handle.")
+		// }
+		err = t.UpdateDDLReorgHandle(job, info.Handle)
+		if err != nil {
+			return info, errors.Trace(err)
 		}
 
 		job.SnapshotVer = ver.Ver
@@ -234,11 +221,6 @@ func (d *ddl) getReorgInfo(t *meta.Meta, job *model.Job) (*reorgInfo, error) {
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
-	}
-
-	if info.Handle > 0 {
-		// we have already handled this handle, so use next
-		info.Handle++
 	}
 
 	return info, errors.Trace(err)

@@ -14,181 +14,384 @@
 package ddl
 
 import (
+	"fmt"
+
 	"github.com/juju/errors"
+	"github.com/pingcap/tidb/ddl/util"
 	"github.com/pingcap/tidb/infoschema"
+	"github.com/pingcap/tidb/kv"
 	"github.com/pingcap/tidb/meta"
 	"github.com/pingcap/tidb/meta/autoid"
 	"github.com/pingcap/tidb/model"
 	"github.com/pingcap/tidb/table"
-	"github.com/pingcap/tidb/terror"
+	"github.com/pingcap/tidb/tablecodec"
+	log "github.com/sirupsen/logrus"
 )
 
-func (d *ddl) onCreateTable(t *meta.Meta, job *model.Job) error {
+func (d *ddl) onCreateTable(t *meta.Meta, job *model.Job) (ver int64, _ error) {
 	schemaID := job.SchemaID
 	tbInfo := &model.TableInfo{}
 	if err := job.DecodeArgs(tbInfo); err != nil {
-		// arg error, cancel this job.
-		job.State = model.JobCancelled
-		return errors.Trace(err)
+		// Invalid arguments, cancel this job.
+		job.State = model.JobStateCancelled
+		return ver, errors.Trace(err)
 	}
 
 	tbInfo.State = model.StateNone
-
-	tables, err := t.ListTables(schemaID)
-	if terror.ErrorEqual(err, meta.ErrDBNotExists) {
-		job.State = model.JobCancelled
-		return errors.Trace(infoschema.DatabaseNotExists)
-	} else if err != nil {
-		return errors.Trace(err)
-	}
-
-	for _, tbl := range tables {
-		if tbl.Name.L == tbInfo.Name.L {
-			if tbl.ID != tbInfo.ID {
-				// table exists, can't create, we should cancel this job now.
-				job.State = model.JobCancelled
-				return errors.Trace(infoschema.TableExists)
-			}
-
-			tbInfo = tbl
-		}
-	}
-
-	_, err = t.GenSchemaVersion()
+	err := checkTableNotExists(t, job, schemaID, tbInfo.Name.L)
 	if err != nil {
-		return errors.Trace(err)
+		return ver, errors.Trace(err)
+	}
+
+	ver, err = updateSchemaVersion(t, job)
+	if err != nil {
+		return ver, errors.Trace(err)
 	}
 
 	switch tbInfo.State {
 	case model.StateNone:
 		// none -> public
-		job.SchemaState = model.StatePublic
 		tbInfo.State = model.StatePublic
+		tbInfo.UpdateTS = t.StartTS
 		err = t.CreateTable(schemaID, tbInfo)
 		if err != nil {
-			return errors.Trace(err)
+			return ver, errors.Trace(err)
 		}
-		// finish this job
-		job.State = model.JobDone
-		return nil
+		if EnableSplitTableRegion {
+			err = d.splitTableRegion(tbInfo.ID)
+			// It will be automatically splitting by TiKV later.
+			if err != nil {
+				log.Warnf("[ddl] split table region failed %v", err)
+			}
+		}
+		// Finish this job.
+		job.FinishTableJob(model.JobStateDone, model.StatePublic, ver, tbInfo)
+		d.asyncNotifyEvent(&util.Event{Tp: model.ActionCreateTable, TableInfo: tbInfo})
+		return ver, nil
 	default:
-		return errors.Errorf("invalid table state %v", tbInfo.State)
+		return ver, ErrInvalidTableState.Gen("invalid table state %v", tbInfo.State)
 	}
 }
 
-func (d *ddl) delReorgTable(t *meta.Meta, job *model.Job) error {
-	tblInfo := &model.TableInfo{}
-	err := job.DecodeArgs(tblInfo)
-	if err != nil {
-		// arg error, cancel this job.
-		job.State = model.JobCancelled
-		return errors.Trace(err)
-	}
-	tblInfo.State = model.StateDeleteReorganization
-	tbl, err := d.getTable(job.SchemaID, tblInfo)
-	if err != nil {
-		return errors.Trace(err)
-	}
-
-	err = d.dropTableData(tbl)
-	if err != nil {
-		return errors.Trace(err)
-	}
-
-	// finish this background job
-	job.SchemaState = model.StateNone
-	job.State = model.JobDone
-
-	return nil
-}
-
-func (d *ddl) onDropTable(t *meta.Meta, job *model.Job) error {
+func (d *ddl) onDropTable(t *meta.Meta, job *model.Job) (ver int64, _ error) {
 	schemaID := job.SchemaID
 	tableID := job.TableID
 
+	// Check this table's database.
 	tblInfo, err := t.GetTable(schemaID, tableID)
-	if terror.ErrorEqual(err, meta.ErrDBNotExists) {
-		job.State = model.JobCancelled
-		return errors.Trace(infoschema.DatabaseNotExists)
-	} else if err != nil {
-		return errors.Trace(err)
-	}
-
-	if tblInfo == nil {
-		job.State = model.JobCancelled
-		return errors.Trace(infoschema.TableNotExists)
-	}
-
-	_, err = t.GenSchemaVersion()
 	if err != nil {
-		return errors.Trace(err)
+		if meta.ErrDBNotExists.Equal(err) {
+			job.State = model.JobStateCancelled
+			return ver, errors.Trace(infoschema.ErrDatabaseNotExists.GenByArgs(
+				fmt.Sprintf("(Schema ID %d)", schemaID),
+			))
+		}
+		return ver, errors.Trace(err)
 	}
 
+	// Check the table.
+	if tblInfo == nil {
+		job.State = model.JobStateCancelled
+		return ver, errors.Trace(infoschema.ErrTableNotExists.GenByArgs(
+			fmt.Sprintf("(Schema ID %d)", schemaID),
+			fmt.Sprintf("(Table ID %d)", tableID),
+		))
+	}
+
+	originalState := job.SchemaState
 	switch tblInfo.State {
 	case model.StatePublic:
 		// public -> write only
 		job.SchemaState = model.StateWriteOnly
 		tblInfo.State = model.StateWriteOnly
-		err = t.UpdateTable(schemaID, tblInfo)
+		ver, err = updateVersionAndTableInfo(t, job, tblInfo, originalState != tblInfo.State)
 	case model.StateWriteOnly:
 		// write only -> delete only
 		job.SchemaState = model.StateDeleteOnly
 		tblInfo.State = model.StateDeleteOnly
-		err = t.UpdateTable(schemaID, tblInfo)
+		ver, err = updateVersionAndTableInfo(t, job, tblInfo, originalState != tblInfo.State)
 	case model.StateDeleteOnly:
 		tblInfo.State = model.StateNone
-		err = t.UpdateTable(schemaID, tblInfo)
-		if err = t.DropTable(job.SchemaID, job.TableID); err != nil {
+		ver, err = updateVersionAndTableInfo(t, job, tblInfo, originalState != tblInfo.State)
+		if err != nil {
+			return ver, errors.Trace(err)
+		}
+		if err = t.DropTable(job.SchemaID, tableID, true); err != nil {
 			break
 		}
-		// finish this job
-		job.Args = []interface{}{tblInfo}
-		job.State = model.JobDone
-		job.SchemaState = model.StateNone
+		// Finish this job.
+		job.FinishTableJob(model.JobStateDone, model.StateNone, ver, tblInfo)
+		startKey := tablecodec.EncodeTablePrefix(tableID)
+		job.Args = append(job.Args, startKey)
 	default:
-		err = errors.Errorf("invalid table state %v", tblInfo.State)
+		err = ErrInvalidTableState.Gen("invalid table state %v", tblInfo.State)
 	}
 
-	return errors.Trace(err)
+	return ver, errors.Trace(err)
+}
+
+func (d *ddl) splitTableRegion(tableID int64) error {
+	type splitableStore interface {
+		SplitRegion(splitKey kv.Key) error
+	}
+	store, ok := d.store.(splitableStore)
+	if !ok {
+		return nil
+	}
+	tableStartKey := tablecodec.GenTablePrefix(tableID)
+	if err := store.SplitRegion(tableStartKey); err != nil {
+		return errors.Trace(err)
+	}
+	return nil
 }
 
 func (d *ddl) getTable(schemaID int64, tblInfo *model.TableInfo) (table.Table, error) {
-	alloc := autoid.NewAllocator(d.store, schemaID)
+	alloc := autoid.NewAllocator(d.store, tblInfo.GetDBID(schemaID))
 	tbl, err := table.TableFromMeta(alloc, tblInfo)
 	return tbl, errors.Trace(err)
 }
 
-func (d *ddl) getTableInfo(t *meta.Meta, job *model.Job) (*model.TableInfo, error) {
-	schemaID := job.SchemaID
+func getTableInfo(t *meta.Meta, job *model.Job, schemaID int64) (*model.TableInfo, error) {
 	tableID := job.TableID
 	tblInfo, err := t.GetTable(schemaID, tableID)
-	if terror.ErrorEqual(err, meta.ErrDBNotExists) {
-		job.State = model.JobCancelled
-		return nil, errors.Trace(infoschema.DatabaseNotExists)
-	} else if err != nil {
+	if err != nil {
+		if meta.ErrDBNotExists.Equal(err) {
+			job.State = model.JobStateCancelled
+			return nil, errors.Trace(infoschema.ErrDatabaseNotExists.GenByArgs(
+				fmt.Sprintf("(Schema ID %d)", schemaID),
+			))
+		}
 		return nil, errors.Trace(err)
 	} else if tblInfo == nil {
-		job.State = model.JobCancelled
-		return nil, errors.Trace(infoschema.TableNotExists)
+		job.State = model.JobStateCancelled
+		return nil, errors.Trace(infoschema.ErrTableNotExists.GenByArgs(
+			fmt.Sprintf("(Schema ID %d)", schemaID),
+			fmt.Sprintf("(Table ID %d)", tableID),
+		))
 	}
 
 	if tblInfo.State != model.StatePublic {
-		job.State = model.JobCancelled
-		return nil, errors.Errorf("table %s is not in public, but %s", tblInfo.Name.L, tblInfo.State)
+		job.State = model.JobStateCancelled
+		return nil, ErrInvalidTableState.Gen("table %s is not in public, but %s", tblInfo.Name, tblInfo.State)
 	}
 
 	return tblInfo, nil
 }
 
-func (d *ddl) dropTableData(t table.Table) error {
-	// delete table data
-	err := d.delKeysWithPrefix(t.RecordPrefix())
+// onTruncateTable delete old table meta, and creates a new table identical to old table except for table ID.
+// As all the old data is encoded with old table ID, it can not be accessed any more.
+// A background job will be created to delete old data.
+func (d *ddl) onTruncateTable(t *meta.Meta, job *model.Job) (ver int64, _ error) {
+	schemaID := job.SchemaID
+	tableID := job.TableID
+	var newTableID int64
+	err := job.DecodeArgs(&newTableID)
 	if err != nil {
+		job.State = model.JobStateCancelled
+		return ver, errors.Trace(err)
+	}
+	tblInfo, err := getTableInfo(t, job, schemaID)
+	if err != nil {
+		return ver, errors.Trace(err)
+	}
+
+	err = t.DropTable(schemaID, tblInfo.ID, true)
+	if err != nil {
+		job.State = model.JobStateCancelled
+		return ver, errors.Trace(err)
+	}
+	tblInfo.ID = newTableID
+	err = t.CreateTable(schemaID, tblInfo)
+	if err != nil {
+		job.State = model.JobStateCancelled
+		return ver, errors.Trace(err)
+	}
+
+	ver, err = updateSchemaVersion(t, job)
+	if err != nil {
+		return ver, errors.Trace(err)
+	}
+	job.FinishTableJob(model.JobStateDone, model.StatePublic, ver, tblInfo)
+	startKey := tablecodec.EncodeTablePrefix(tableID)
+	job.Args = []interface{}{startKey}
+	return ver, nil
+}
+
+func (d *ddl) onRebaseAutoID(t *meta.Meta, job *model.Job) (ver int64, _ error) {
+	schemaID := job.SchemaID
+	var newBase int64
+	err := job.DecodeArgs(&newBase)
+	if err != nil {
+		job.State = model.JobStateCancelled
+		return ver, errors.Trace(err)
+	}
+	tblInfo, err := getTableInfo(t, job, schemaID)
+	if err != nil {
+		job.State = model.JobStateCancelled
+		return ver, errors.Trace(err)
+	}
+	tblInfo.AutoIncID = newBase
+	tbl, err := d.getTable(schemaID, tblInfo)
+	if err != nil {
+		job.State = model.JobStateCancelled
+		return ver, errors.Trace(err)
+	}
+	// The operation of the minus 1 to make sure that the current value doesn't be used,
+	// the next Alloc operation will get this value.
+	// Its behavior is consistent with MySQL.
+	err = tbl.RebaseAutoID(nil, tblInfo.AutoIncID-1, false)
+	if err != nil {
+		job.State = model.JobStateCancelled
+		return ver, errors.Trace(err)
+	}
+	ver, err = updateVersionAndTableInfo(t, job, tblInfo, true)
+	if err != nil {
+		job.State = model.JobStateCancelled
+		return ver, errors.Trace(err)
+	}
+	job.FinishTableJob(model.JobStateDone, model.StatePublic, ver, tblInfo)
+	return ver, nil
+}
+
+func (d *ddl) onShardRowID(t *meta.Meta, job *model.Job) (ver int64, _ error) {
+	var shardRowIDBits uint64
+	err := job.DecodeArgs(&shardRowIDBits)
+	if err != nil {
+		job.State = model.JobStateCancelled
+		return ver, errors.Trace(err)
+	}
+	tblInfo, err := getTableInfo(t, job, job.SchemaID)
+	if err != nil {
+		job.State = model.JobStateCancelled
+		return ver, errors.Trace(err)
+	}
+	tblInfo.ShardRowIDBits = shardRowIDBits
+	ver, err = updateVersionAndTableInfo(t, job, tblInfo, true)
+	if err != nil {
+		job.State = model.JobStateCancelled
+		return ver, errors.Trace(err)
+	}
+	job.FinishTableJob(model.JobStateDone, model.StatePublic, ver, tblInfo)
+	return ver, nil
+}
+
+func (d *ddl) onRenameTable(t *meta.Meta, job *model.Job) (ver int64, _ error) {
+	var oldSchemaID int64
+	var tableName model.CIStr
+	if err := job.DecodeArgs(&oldSchemaID, &tableName); err != nil {
+		// Invalid arguments, cancel this job.
+		job.State = model.JobStateCancelled
+		return ver, errors.Trace(err)
+	}
+
+	tblInfo, err := getTableInfo(t, job, oldSchemaID)
+	if err != nil {
+		return ver, errors.Trace(err)
+	}
+	newSchemaID := job.SchemaID
+	err = checkTableNotExists(t, job, newSchemaID, tableName.L)
+	if err != nil {
+		return ver, errors.Trace(err)
+	}
+
+	var baseID int64
+	shouldDelAutoID := false
+	if newSchemaID != oldSchemaID {
+		shouldDelAutoID = true
+		baseID, err = t.GetAutoTableID(tblInfo.GetDBID(oldSchemaID), tblInfo.ID)
+		if err != nil {
+			job.State = model.JobStateCancelled
+			return ver, errors.Trace(err)
+		}
+		// It's compatible with old version.
+		// TODO: Remove it.
+		tblInfo.OldSchemaID = 0
+	}
+
+	err = t.DropTable(oldSchemaID, tblInfo.ID, shouldDelAutoID)
+	if err != nil {
+		job.State = model.JobStateCancelled
+		return ver, errors.Trace(err)
+	}
+	tblInfo.Name = tableName
+	err = t.CreateTable(newSchemaID, tblInfo)
+	if err != nil {
+		job.State = model.JobStateCancelled
+		return ver, errors.Trace(err)
+	}
+	// Update the table's auto-increment ID.
+	if newSchemaID != oldSchemaID {
+		_, err = t.GenAutoTableID(newSchemaID, tblInfo.ID, baseID)
+		if err != nil {
+			job.State = model.JobStateCancelled
+			return ver, errors.Trace(err)
+		}
+	}
+
+	ver, err = updateSchemaVersion(t, job)
+	if err != nil {
+		return ver, errors.Trace(err)
+	}
+	job.FinishTableJob(model.JobStateDone, model.StatePublic, ver, tblInfo)
+	return ver, nil
+}
+
+func (d *ddl) onModifyTableComment(t *meta.Meta, job *model.Job) (ver int64, _ error) {
+	var comment string
+	if err := job.DecodeArgs(&comment); err != nil {
+		job.State = model.JobStateCancelled
+		return ver, errors.Trace(err)
+	}
+
+	tblInfo, err := getTableInfo(t, job, job.SchemaID)
+	if err != nil {
+		return ver, errors.Trace(err)
+	}
+
+	tblInfo.Comment = comment
+	ver, err = updateVersionAndTableInfo(t, job, tblInfo, true)
+	if err != nil {
+		return ver, errors.Trace(err)
+	}
+	job.FinishTableJob(model.JobStateDone, model.StatePublic, ver, tblInfo)
+	return ver, nil
+}
+
+func checkTableNotExists(t *meta.Meta, job *model.Job, schemaID int64, tableName string) error {
+	// Check this table's database.
+	tables, err := t.ListTables(schemaID)
+	if err != nil {
+		if meta.ErrDBNotExists.Equal(err) {
+			job.State = model.JobStateCancelled
+			return infoschema.ErrDatabaseNotExists.GenByArgs("")
+		}
 		return errors.Trace(err)
 	}
 
-	// delete table index
-	err = d.delKeysWithPrefix(t.IndexPrefix())
+	// Check the table.
+	for _, tbl := range tables {
+		if tbl.Name.L == tableName {
+			// This table already exists and can't be created, we should cancel this job now.
+			job.State = model.JobStateCancelled
+			return infoschema.ErrTableExists.GenByArgs(tbl.Name)
+		}
+	}
 
-	return errors.Trace(err)
+	return nil
+}
+
+// updateVersionAndTableInfo updates the schema version and the table information.
+func updateVersionAndTableInfo(t *meta.Meta, job *model.Job, tblInfo *model.TableInfo, shouldUpdateVer bool) (
+	ver int64, err error) {
+	if shouldUpdateVer {
+		ver, err = updateSchemaVersion(t, job)
+		if err != nil {
+			return 0, errors.Trace(err)
+		}
+	}
+
+	if tblInfo.State == model.StatePublic {
+		tblInfo.UpdateTS = t.StartTS
+	}
+	return ver, t.UpdateTable(job.SchemaID, tblInfo)
 }

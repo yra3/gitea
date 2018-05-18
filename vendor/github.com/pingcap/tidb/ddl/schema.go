@@ -17,19 +17,16 @@ import (
 	"github.com/juju/errors"
 	"github.com/pingcap/tidb/infoschema"
 	"github.com/pingcap/tidb/meta"
-	"github.com/pingcap/tidb/meta/autoid"
 	"github.com/pingcap/tidb/model"
-	"github.com/pingcap/tidb/table"
-	"github.com/pingcap/tidb/terror"
 )
 
-func (d *ddl) onCreateSchema(t *meta.Meta, job *model.Job) error {
+func (d *ddl) onCreateSchema(t *meta.Meta, job *model.Job) (ver int64, _ error) {
 	schemaID := job.SchemaID
 	dbInfo := &model.DBInfo{}
 	if err := job.DecodeArgs(dbInfo); err != nil {
-		// arg error, cancel this job.
-		job.State = model.JobCancelled
-		return errors.Trace(err)
+		// Invalid arguments, cancel this job.
+		job.State = model.JobStateCancelled
+		return ver, errors.Trace(err)
 	}
 
 	dbInfo.ID = schemaID
@@ -37,84 +34,55 @@ func (d *ddl) onCreateSchema(t *meta.Meta, job *model.Job) error {
 
 	dbs, err := t.ListDatabases()
 	if err != nil {
-		return errors.Trace(err)
+		return ver, errors.Trace(err)
 	}
 
 	for _, db := range dbs {
 		if db.Name.L == dbInfo.Name.L {
 			if db.ID != schemaID {
-				// database exists, can't create, we should cancel this job now.
-				job.State = model.JobCancelled
-				return errors.Trace(infoschema.DatabaseExists)
+				// The database already exists, can't create it, we should cancel this job now.
+				job.State = model.JobStateCancelled
+				return ver, infoschema.ErrDatabaseExists.GenByArgs(db.Name)
 			}
 			dbInfo = db
 		}
 	}
 
-	_, err = t.GenSchemaVersion()
+	ver, err = updateSchemaVersion(t, job)
 	if err != nil {
-		return errors.Trace(err)
+		return ver, errors.Trace(err)
 	}
 
 	switch dbInfo.State {
 	case model.StateNone:
 		// none -> public
-		job.SchemaState = model.StatePublic
 		dbInfo.State = model.StatePublic
 		err = t.CreateDatabase(dbInfo)
 		if err != nil {
-			return errors.Trace(err)
+			return ver, errors.Trace(err)
 		}
-		// finish this job
-		job.State = model.JobDone
-		return nil
+		// Finish this job.
+		job.FinishDBJob(model.JobStateDone, model.StatePublic, ver, dbInfo)
+		return ver, nil
 	default:
-		// we can't enter here.
-		return errors.Errorf("invalid db state %v", dbInfo.State)
+		// We can't enter here.
+		return ver, errors.Errorf("invalid db state %v", dbInfo.State)
 	}
 }
 
-func (d *ddl) delReorgSchema(t *meta.Meta, job *model.Job) error {
-	dbInfo := &model.DBInfo{}
-	if err := job.DecodeArgs(dbInfo); err != nil {
-		// arg error, cancel this job.
-		job.State = model.JobCancelled
-		return errors.Trace(err)
-	}
-
-	tables, err := t.ListTables(dbInfo.ID)
-	if terror.ErrorEqual(meta.ErrDBNotExists, err) {
-		job.State = model.JobDone
-		return nil
-	}
-	if err != nil {
-		return errors.Trace(err)
-	}
-
-	if err = d.dropSchemaData(dbInfo, tables); err != nil {
-		return errors.Trace(err)
-	}
-
-	// finish this background job
-	job.SchemaState = model.StateNone
-	job.State = model.JobDone
-
-	return nil
-}
-
-func (d *ddl) onDropSchema(t *meta.Meta, job *model.Job) error {
+func (d *ddl) onDropSchema(t *meta.Meta, job *model.Job) (ver int64, _ error) {
 	dbInfo, err := t.GetDatabase(job.SchemaID)
 	if err != nil {
-		return errors.Trace(err)
+		return ver, errors.Trace(err)
 	}
 	if dbInfo == nil {
-		job.State = model.JobCancelled
-		return errors.Trace(infoschema.DatabaseNotExists)
+		job.State = model.JobStateCancelled
+		return ver, infoschema.ErrDatabaseDropExists.GenByArgs("")
 	}
 
-	_, err = t.GenSchemaVersion()
+	ver, err = updateSchemaVersion(t, job)
 	if err != nil {
-		return errors.Trace(err)
+		return ver, errors.Trace(err)
 	}
 
 	switch dbInfo.State {
@@ -129,35 +97,39 @@ func (d *ddl) onDropSchema(t *meta.Meta, job *model.Job) error {
 		dbInfo.State = model.StateDeleteOnly
 		err = t.UpdateDatabase(dbInfo)
 	case model.StateDeleteOnly:
-		dbInfo.State = model.StateDeleteReorganization
+		dbInfo.State = model.StateNone
+		var tables []*model.TableInfo
+		tables, err = t.ListTables(job.SchemaID)
+		if err != nil {
+			return ver, errors.Trace(err)
+		}
+
 		err = t.UpdateDatabase(dbInfo)
+		if err != nil {
+			return ver, errors.Trace(err)
+		}
 		if err = t.DropDatabase(dbInfo.ID); err != nil {
 			break
 		}
-		// finish this job
-		job.Args = []interface{}{dbInfo}
-		job.State = model.JobDone
-		job.SchemaState = model.StateNone
+
+		// Finish this job.
+		if len(tables) > 0 {
+			job.Args = append(job.Args, getIDs(tables))
+		}
+		job.FinishDBJob(model.JobStateDone, model.StateNone, ver, dbInfo)
 	default:
-		// we can't enter here.
+		// We can't enter here.
 		err = errors.Errorf("invalid db state %v", dbInfo.State)
 	}
 
-	return errors.Trace(err)
+	return ver, errors.Trace(err)
 }
 
-func (d *ddl) dropSchemaData(dbInfo *model.DBInfo, tables []*model.TableInfo) error {
-	for _, tblInfo := range tables {
-		alloc := autoid.NewAllocator(d.store, dbInfo.ID)
-		t, err := table.TableFromMeta(alloc, tblInfo)
-		if err != nil {
-			return errors.Trace(err)
-		}
-
-		err = d.dropTableData(t)
-		if err != nil {
-			return errors.Trace(err)
-		}
+func getIDs(tables []*model.TableInfo) []int64 {
+	ids := make([]int64, 0, len(tables))
+	for _, t := range tables {
+		ids = append(ids, t.ID)
 	}
-	return nil
+
+	return ids
 }

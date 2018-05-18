@@ -14,50 +14,94 @@
 package types
 
 import (
+	"fmt"
 	"math"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/juju/errors"
 	"github.com/pingcap/tidb/mysql"
+	"github.com/pingcap/tidb/sessionctx/variable"
 	"github.com/pingcap/tidb/util/charset"
 	"github.com/pingcap/tidb/util/hack"
+	"github.com/pingcap/tidb/util/types/json"
 )
 
 // Kind constants.
 const (
-	KindNull  int = 0
-	KindInt64 int = iota + 1
-	KindUint64
-	KindFloat32
-	KindFloat64
-	KindString
-	KindBytes
-	KindMysqlBit
-	KindMysqlDecimal
-	KindMysqlDuration
-	KindMysqlEnum
-	KindMysqlHex
-	KindMysqlSet
-	KindMysqlTime
-	KindRow
-	KindInterface
-	KindMinNotNull
-	KindMaxValue
+	KindNull          byte = 0
+	KindInt64         byte = 1
+	KindUint64        byte = 2
+	KindFloat32       byte = 3
+	KindFloat64       byte = 4
+	KindString        byte = 5
+	KindBytes         byte = 6
+	KindBinaryLiteral byte = 7 // Used for BIT / HEX literals.
+	KindMysqlDecimal  byte = 8
+	KindMysqlDuration byte = 9
+	KindMysqlEnum     byte = 10
+	KindMysqlBit      byte = 11 // Used for BIT table column values.
+	KindMysqlSet      byte = 12
+	KindMysqlTime     byte = 13
+	KindInterface     byte = 14
+	KindMinNotNull    byte = 15
+	KindMaxValue      byte = 16
+	KindRaw           byte = 17
+	KindMysqlJSON     byte = 18
 )
 
 // Datum is a data box holds different kind of data.
 // It has better performance and is easier to use than `interface{}`.
 type Datum struct {
-	k int         // datum kind.
-	i int64       // i can hold int64 uint64 float64 values.
-	b []byte      // b can hold string or []byte values.
-	x interface{} // f hold all other types.
+	k         byte        // datum kind.
+	collation uint8       // collation can hold uint8 values.
+	decimal   uint16      // decimal can hold uint16 values.
+	length    uint32      // length can hold uint32 values.
+	i         int64       // i can hold int64 uint64 float64 values.
+	b         []byte      // b can hold string or []byte values.
+	x         interface{} // x hold all other types.
 }
 
 // Kind gets the kind of the datum.
-func (d *Datum) Kind() int {
+func (d *Datum) Kind() byte {
 	return d.k
+}
+
+// Collation gets the collation of the datum.
+func (d *Datum) Collation() byte {
+	return d.collation
+}
+
+// SetCollation sets the collation of the datum.
+func (d *Datum) SetCollation(collation byte) {
+	d.collation = collation
+}
+
+// Frac gets the frac of the datum.
+func (d *Datum) Frac() int {
+	return int(d.decimal)
+}
+
+// SetFrac sets the frac of the datum.
+func (d *Datum) SetFrac(frac int) {
+	d.decimal = uint16(frac)
+}
+
+// Length gets the length of the datum.
+func (d *Datum) Length() int {
+	return int(d.length)
+}
+
+// SetLength sets the length of the datum
+func (d *Datum) SetLength(l int) {
+	d.length = uint32(l)
+}
+
+// IsNull checks if datum is null.
+func (d *Datum) IsNull() bool {
+	return d.k == KindNull
 }
 
 // GetInt64 gets int64 value.
@@ -148,92 +192,114 @@ func (d *Datum) SetInterface(x interface{}) {
 	d.x = x
 }
 
-// GetRow gets row value.
-func (d *Datum) GetRow() []Datum {
-	return d.x.([]Datum)
-}
-
 // SetNull sets datum to nil.
 func (d *Datum) SetNull() {
 	d.k = KindNull
 	d.x = nil
 }
 
-// GetMysqlBit gets mysql.Bit value
-func (d *Datum) GetMysqlBit() mysql.Bit {
-	return d.x.(mysql.Bit)
+// GetBinaryLiteral gets Bit value
+func (d *Datum) GetBinaryLiteral() BinaryLiteral {
+	return d.b
 }
 
-// SetMysqlBit sets mysql.Bit value
-func (d *Datum) SetMysqlBit(b mysql.Bit) {
+// GetMysqlBit gets MysqlBit value
+func (d *Datum) GetMysqlBit() BinaryLiteral {
+	return d.GetBinaryLiteral()
+}
+
+// SetBinaryLiteral sets Bit value
+func (d *Datum) SetBinaryLiteral(b BinaryLiteral) {
+	d.k = KindBinaryLiteral
+	d.b = b
+}
+
+// SetMysqlBit sets MysqlBit value
+func (d *Datum) SetMysqlBit(b BinaryLiteral) {
 	d.k = KindMysqlBit
-	d.x = b
+	d.b = b
 }
 
-// GetMysqlDecimal gets mysql.Decimal value
-func (d *Datum) GetMysqlDecimal() mysql.Decimal {
-	return d.x.(mysql.Decimal)
+// GetMysqlDecimal gets Decimal value
+func (d *Datum) GetMysqlDecimal() *MyDecimal {
+	return d.x.(*MyDecimal)
 }
 
-// SetMysqlDecimal sets mysql.Decimal value
-func (d *Datum) SetMysqlDecimal(b mysql.Decimal) {
+// SetMysqlDecimal sets Decimal value
+func (d *Datum) SetMysqlDecimal(b *MyDecimal) {
 	d.k = KindMysqlDecimal
 	d.x = b
 }
 
-// GetMysqlDuration gets mysql.Duration value
-func (d *Datum) GetMysqlDuration() mysql.Duration {
-	return d.x.(mysql.Duration)
+// GetMysqlDuration gets Duration value
+func (d *Datum) GetMysqlDuration() Duration {
+	return Duration{Duration: time.Duration(d.i), Fsp: int(d.decimal)}
 }
 
-// SetMysqlDuration sets mysql.Duration value
-func (d *Datum) SetMysqlDuration(b mysql.Duration) {
+// SetMysqlDuration sets Duration value
+func (d *Datum) SetMysqlDuration(b Duration) {
 	d.k = KindMysqlDuration
-	d.x = b
+	d.i = int64(b.Duration)
+	d.decimal = uint16(b.Fsp)
 }
 
-// GetMysqlEnum gets mysql.Enum value
-func (d *Datum) GetMysqlEnum() mysql.Enum {
-	return d.x.(mysql.Enum)
+// GetMysqlEnum gets Enum value
+func (d *Datum) GetMysqlEnum() Enum {
+	return Enum{Value: uint64(d.i), Name: hack.String(d.b)}
 }
 
-// SetMysqlEnum sets mysql.Enum value
-func (d *Datum) SetMysqlEnum(b mysql.Enum) {
+// SetMysqlEnum sets Enum value
+func (d *Datum) SetMysqlEnum(b Enum) {
 	d.k = KindMysqlEnum
-	d.x = b
+	d.i = int64(b.Value)
+	sink(b.Name)
+	d.b = hack.Slice(b.Name)
 }
 
-// GetMysqlHex gets mysql.Hex value
-func (d *Datum) GetMysqlHex() mysql.Hex {
-	return d.x.(mysql.Hex)
+// GetMysqlSet gets Set value
+func (d *Datum) GetMysqlSet() Set {
+	return Set{Value: uint64(d.i), Name: hack.String(d.b)}
 }
 
-// SetMysqlHex sets mysql.Hex value
-func (d *Datum) SetMysqlHex(b mysql.Hex) {
-	d.k = KindMysqlHex
-	d.x = b
-}
-
-// GetMysqlSet gets mysql.Set value
-func (d *Datum) GetMysqlSet() mysql.Set {
-	return d.x.(mysql.Set)
-}
-
-// SetMysqlSet sets mysql.Set value
-func (d *Datum) SetMysqlSet(b mysql.Set) {
+// SetMysqlSet sets Set value
+func (d *Datum) SetMysqlSet(b Set) {
 	d.k = KindMysqlSet
+	d.i = int64(b.Value)
+	sink(b.Name)
+	d.b = hack.Slice(b.Name)
+}
+
+// GetMysqlJSON gets json.JSON value
+func (d *Datum) GetMysqlJSON() json.JSON {
+	return d.x.(json.JSON)
+}
+
+// SetMysqlJSON sets json.JSON value
+func (d *Datum) SetMysqlJSON(b json.JSON) {
+	d.k = KindMysqlJSON
 	d.x = b
 }
 
-// GetMysqlTime gets mysql.Time value
-func (d *Datum) GetMysqlTime() mysql.Time {
-	return d.x.(mysql.Time)
+// GetMysqlTime gets types.Time value
+func (d *Datum) GetMysqlTime() Time {
+	return d.x.(Time)
 }
 
-// SetMysqlTime sets mysql.Time value
-func (d *Datum) SetMysqlTime(b mysql.Time) {
+// SetMysqlTime sets types.Time value
+func (d *Datum) SetMysqlTime(b Time) {
 	d.k = KindMysqlTime
 	d.x = b
+}
+
+// SetRaw sets raw value.
+func (d *Datum) SetRaw(b []byte) {
+	d.k = KindRaw
+	d.b = b
+}
+
+// GetRaw gets raw value.
+func (d *Datum) GetRaw() []byte {
+	return d.b
 }
 
 // GetValue gets the value of the datum of any kind.
@@ -251,8 +317,22 @@ func (d *Datum) GetValue() interface{} {
 		return d.GetString()
 	case KindBytes:
 		return d.GetBytes()
+	case KindMysqlDecimal:
+		return d.GetMysqlDecimal()
+	case KindMysqlDuration:
+		return d.GetMysqlDuration()
+	case KindMysqlEnum:
+		return d.GetMysqlEnum()
+	case KindBinaryLiteral, KindMysqlBit:
+		return d.GetBinaryLiteral()
+	case KindMysqlSet:
+		return d.GetMysqlSet()
+	case KindMysqlJSON:
+		return d.GetMysqlJSON()
+	case KindMysqlTime:
+		return d.GetMysqlTime()
 	default:
-		return d.x
+		return d.GetInterface()
 	}
 }
 
@@ -281,30 +361,24 @@ func (d *Datum) SetValue(val interface{}) {
 		d.SetString(x)
 	case []byte:
 		d.SetBytes(x)
-	case mysql.Bit:
-		d.x = x
-		d.k = KindMysqlBit
-	case mysql.Decimal:
-		d.x = x
-		d.k = KindMysqlDecimal
-	case mysql.Duration:
-		d.x = x
-		d.k = KindMysqlDuration
-	case mysql.Enum:
-		d.x = x
-		d.k = KindMysqlEnum
-	case mysql.Hex:
-		d.x = x
-		d.k = KindMysqlHex
-	case mysql.Set:
-		d.x = x
-		d.k = KindMysqlSet
-	case mysql.Time:
-		d.x = x
-		d.k = KindMysqlTime
-	case []Datum:
-		d.x = x
-		d.k = KindRow
+	case *MyDecimal:
+		d.SetMysqlDecimal(x)
+	case Duration:
+		d.SetMysqlDuration(x)
+	case Enum:
+		d.SetMysqlEnum(x)
+	case BinaryLiteral:
+		d.SetBinaryLiteral(x)
+	case BitLiteral: // Store as BinaryLiteral for Bit and Hex literals
+		d.SetBinaryLiteral(BinaryLiteral(x))
+	case HexLiteral:
+		d.SetBinaryLiteral(BinaryLiteral(x))
+	case Set:
+		d.SetMysqlSet(x)
+	case json.JSON:
+		d.SetMysqlJSON(x)
+	case Time:
+		d.SetMysqlTime(x)
 	default:
 		d.SetInterface(x)
 	}
@@ -312,7 +386,11 @@ func (d *Datum) SetValue(val interface{}) {
 
 // CompareDatum compares datum to another datum.
 // TODO: return error properly.
-func (d *Datum) CompareDatum(ad Datum) (int, error) {
+func (d *Datum) CompareDatum(sc *variable.StatementContext, ad *Datum) (int, error) {
+	if d.k == KindMysqlJSON && ad.k != KindMysqlJSON {
+		cmp, err := ad.CompareDatum(sc, d)
+		return cmp * -1, errors.Trace(err)
+	}
 	switch ad.k {
 	case KindNull:
 		if d.k == KindNull {
@@ -332,37 +410,35 @@ func (d *Datum) CompareDatum(ad Datum) (int, error) {
 		}
 		return -1, nil
 	case KindInt64:
-		return d.compareInt64(ad.GetInt64())
+		return d.compareInt64(sc, ad.GetInt64())
 	case KindUint64:
-		return d.compareUint64(ad.GetUint64())
+		return d.compareUint64(sc, ad.GetUint64())
 	case KindFloat32, KindFloat64:
-		return d.compareFloat64(ad.GetFloat64())
+		return d.compareFloat64(sc, ad.GetFloat64())
 	case KindString:
-		return d.compareString(ad.GetString())
+		return d.compareString(sc, ad.GetString())
 	case KindBytes:
-		return d.compareBytes(ad.GetBytes())
-	case KindMysqlBit:
-		return d.compareMysqlBit(ad.GetMysqlBit())
+		return d.compareBytes(sc, ad.GetBytes())
 	case KindMysqlDecimal:
-		return d.compareMysqlDecimal(ad.GetMysqlDecimal())
+		return d.compareMysqlDecimal(sc, ad.GetMysqlDecimal())
 	case KindMysqlDuration:
-		return d.compareMysqlDuration(ad.GetMysqlDuration())
+		return d.compareMysqlDuration(sc, ad.GetMysqlDuration())
 	case KindMysqlEnum:
-		return d.compareMysqlEnum(ad.GetMysqlEnum())
-	case KindMysqlHex:
-		return d.compareMysqlHex(ad.GetMysqlHex())
+		return d.compareMysqlEnum(sc, ad.GetMysqlEnum())
+	case KindBinaryLiteral, KindMysqlBit:
+		return d.compareBinaryLiteral(sc, ad.GetBinaryLiteral())
 	case KindMysqlSet:
-		return d.compareMysqlSet(ad.GetMysqlSet())
+		return d.compareMysqlSet(sc, ad.GetMysqlSet())
+	case KindMysqlJSON:
+		return d.compareMysqlJSON(sc, ad.GetMysqlJSON())
 	case KindMysqlTime:
-		return d.compareMysqlTime(ad.GetMysqlTime())
-	case KindRow:
-		return d.compareRow(ad.GetRow())
+		return d.compareMysqlTime(sc, ad.GetMysqlTime())
 	default:
 		return 0, nil
 	}
 }
 
-func (d *Datum) compareInt64(i int64) (int, error) {
+func (d *Datum) compareInt64(sc *variable.StatementContext, i int64) (int, error) {
 	switch d.k {
 	case KindMaxValue:
 		return 1, nil
@@ -374,11 +450,11 @@ func (d *Datum) compareInt64(i int64) (int, error) {
 		}
 		return CompareInt64(d.i, i), nil
 	default:
-		return d.compareFloat64(float64(i))
+		return d.compareFloat64(sc, float64(i))
 	}
 }
 
-func (d *Datum) compareUint64(u uint64) (int, error) {
+func (d *Datum) compareUint64(sc *variable.StatementContext, u uint64) (int, error) {
 	switch d.k {
 	case KindMaxValue:
 		return 1, nil
@@ -390,11 +466,11 @@ func (d *Datum) compareUint64(u uint64) (int, error) {
 	case KindUint64:
 		return CompareUint64(d.GetUint64(), u), nil
 	default:
-		return d.compareFloat64(float64(u))
+		return d.compareFloat64(sc, float64(u))
 	}
 }
 
-func (d *Datum) compareFloat64(f float64) (int, error) {
+func (d *Datum) compareFloat64(sc *variable.StatementContext, f float64) (int, error) {
 	switch d.k {
 	case KindNull, KindMinNotNull:
 		return -1, nil
@@ -407,35 +483,33 @@ func (d *Datum) compareFloat64(f float64) (int, error) {
 	case KindFloat32, KindFloat64:
 		return CompareFloat64(d.GetFloat64(), f), nil
 	case KindString, KindBytes:
-		fVal, err := StrToFloat(d.GetString())
+		fVal, err := StrToFloat(sc, d.GetString())
 		return CompareFloat64(fVal, f), err
-	case KindMysqlBit:
-		fVal := d.GetMysqlBit().ToNumber()
-		return CompareFloat64(fVal, f), nil
 	case KindMysqlDecimal:
-		fVal, _ := d.GetMysqlDecimal().Float64()
-		return CompareFloat64(fVal, f), nil
+		fVal, err := d.GetMysqlDecimal().ToFloat64()
+		return CompareFloat64(fVal, f), err
 	case KindMysqlDuration:
 		fVal := d.GetMysqlDuration().Seconds()
 		return CompareFloat64(fVal, f), nil
 	case KindMysqlEnum:
 		fVal := d.GetMysqlEnum().ToNumber()
 		return CompareFloat64(fVal, f), nil
-	case KindMysqlHex:
-		fVal := d.GetMysqlHex().ToNumber()
-		return CompareFloat64(fVal, f), nil
+	case KindBinaryLiteral, KindMysqlBit:
+		val, err := d.GetBinaryLiteral().ToInt()
+		fVal := float64(val)
+		return CompareFloat64(fVal, f), err
 	case KindMysqlSet:
 		fVal := d.GetMysqlSet().ToNumber()
 		return CompareFloat64(fVal, f), nil
 	case KindMysqlTime:
-		fVal, _ := d.GetMysqlTime().ToNumber().Float64()
-		return CompareFloat64(fVal, f), nil
+		fVal, err := d.GetMysqlTime().ToNumber().ToFloat64()
+		return CompareFloat64(fVal, f), err
 	default:
 		return -1, nil
 	}
 }
 
-func (d *Datum) compareString(s string) (int, error) {
+func (d *Datum) compareString(sc *variable.StatementContext, s string) (int, error) {
 	switch d.k {
 	case KindNull, KindMinNotNull:
 		return -1, nil
@@ -444,130 +518,123 @@ func (d *Datum) compareString(s string) (int, error) {
 	case KindString, KindBytes:
 		return CompareString(d.GetString(), s), nil
 	case KindMysqlDecimal:
-		dec, err := mysql.ParseDecimal(s)
-		return d.GetMysqlDecimal().Cmp(dec), err
+		dec := new(MyDecimal)
+		err := sc.HandleTruncate(dec.FromString(hack.Slice(s)))
+		return d.GetMysqlDecimal().Compare(dec), err
 	case KindMysqlTime:
-		dt, err := mysql.ParseDatetime(s)
+		dt, err := ParseDatetime(sc, s)
 		return d.GetMysqlTime().Compare(dt), err
 	case KindMysqlDuration:
-		dur, err := mysql.ParseDuration(s, mysql.MaxFsp)
+		dur, err := ParseDuration(s, MaxFsp)
 		return d.GetMysqlDuration().Compare(dur), err
-	case KindMysqlBit:
-		return CompareString(d.GetMysqlBit().ToString(), s), nil
-	case KindMysqlHex:
-		return CompareString(d.GetMysqlHex().ToString(), s), nil
 	case KindMysqlSet:
 		return CompareString(d.GetMysqlSet().String(), s), nil
 	case KindMysqlEnum:
 		return CompareString(d.GetMysqlEnum().String(), s), nil
+	case KindBinaryLiteral, KindMysqlBit:
+		return CompareString(d.GetBinaryLiteral().ToString(), s), nil
 	default:
-		fVal, err := StrToFloat(s)
+		fVal, err := StrToFloat(sc, s)
 		if err != nil {
 			return 0, err
 		}
-		return d.compareFloat64(fVal)
+		return d.compareFloat64(sc, fVal)
 	}
 }
 
-func (d *Datum) compareBytes(b []byte) (int, error) {
-	return d.compareString(hack.String(b))
+func (d *Datum) compareBytes(sc *variable.StatementContext, b []byte) (int, error) {
+	return d.compareString(sc, hack.String(b))
 }
 
-func (d *Datum) compareMysqlBit(bit mysql.Bit) (int, error) {
-	switch d.k {
-	case KindString, KindBytes:
-		return CompareString(d.GetString(), bit.ToString()), nil
-	default:
-		return d.compareFloat64(bit.ToNumber())
-	}
-}
-
-func (d *Datum) compareMysqlDecimal(dec mysql.Decimal) (int, error) {
+func (d *Datum) compareMysqlDecimal(sc *variable.StatementContext, dec *MyDecimal) (int, error) {
 	switch d.k {
 	case KindMysqlDecimal:
-		return d.GetMysqlDecimal().Cmp(dec), nil
+		return d.GetMysqlDecimal().Compare(dec), nil
 	case KindString, KindBytes:
-		dDec, err := mysql.ParseDecimal(d.GetString())
-		return dDec.Cmp(dec), err
+		dDec := new(MyDecimal)
+		err := sc.HandleTruncate(dDec.FromString(d.GetBytes()))
+		return dDec.Compare(dec), err
 	default:
-		fVal, _ := dec.Float64()
-		return d.compareFloat64(fVal)
+		fVal, err := dec.ToFloat64()
+		if err != nil {
+			return 0, errors.Trace(err)
+		}
+		return d.compareFloat64(sc, fVal)
 	}
 }
 
-func (d *Datum) compareMysqlDuration(dur mysql.Duration) (int, error) {
+func (d *Datum) compareMysqlDuration(sc *variable.StatementContext, dur Duration) (int, error) {
 	switch d.k {
 	case KindMysqlDuration:
 		return d.GetMysqlDuration().Compare(dur), nil
 	case KindString, KindBytes:
-		dDur, err := mysql.ParseDuration(d.GetString(), mysql.MaxFsp)
+		dDur, err := ParseDuration(d.GetString(), MaxFsp)
 		return dDur.Compare(dur), err
 	default:
-		return d.compareFloat64(dur.Seconds())
+		return d.compareFloat64(sc, dur.Seconds())
 	}
 }
 
-func (d *Datum) compareMysqlEnum(enum mysql.Enum) (int, error) {
+func (d *Datum) compareMysqlEnum(sc *variable.StatementContext, enum Enum) (int, error) {
 	switch d.k {
 	case KindString, KindBytes:
 		return CompareString(d.GetString(), enum.String()), nil
 	default:
-		return d.compareFloat64(enum.ToNumber())
+		return d.compareFloat64(sc, enum.ToNumber())
 	}
 }
 
-func (d *Datum) compareMysqlHex(e mysql.Hex) (int, error) {
+func (d *Datum) compareBinaryLiteral(sc *variable.StatementContext, b BinaryLiteral) (int, error) {
 	switch d.k {
 	case KindString, KindBytes:
-		return CompareString(d.GetString(), e.ToString()), nil
+		return CompareString(d.GetString(), b.ToString()), nil
+	case KindBinaryLiteral, KindMysqlBit:
+		return CompareString(d.GetBinaryLiteral().ToString(), b.ToString()), nil
 	default:
-		return d.compareFloat64(e.ToNumber())
+		val, err := b.ToInt()
+		if err != nil {
+			return 0, errors.Trace(err)
+		}
+		result, err := d.compareFloat64(sc, float64(val))
+		return result, errors.Trace(err)
 	}
 }
 
-func (d *Datum) compareMysqlSet(set mysql.Set) (int, error) {
+func (d *Datum) compareMysqlSet(sc *variable.StatementContext, set Set) (int, error) {
 	switch d.k {
 	case KindString, KindBytes:
 		return CompareString(d.GetString(), set.String()), nil
 	default:
-		return d.compareFloat64(set.ToNumber())
+		return d.compareFloat64(sc, set.ToNumber())
 	}
 }
 
-func (d *Datum) compareMysqlTime(time mysql.Time) (int, error) {
+func (d *Datum) compareMysqlJSON(sc *variable.StatementContext, target json.JSON) (int, error) {
+	origin, err := d.ToMysqlJSON()
+	if err != nil {
+		return 0, errors.Trace(err)
+	}
+	return json.CompareJSON(origin, target)
+}
+
+func (d *Datum) compareMysqlTime(sc *variable.StatementContext, time Time) (int, error) {
 	switch d.k {
 	case KindString, KindBytes:
-		dt, err := mysql.ParseDatetime(d.GetString())
+		dt, err := ParseDatetime(sc, d.GetString())
 		return dt.Compare(time), err
 	case KindMysqlTime:
 		return d.GetMysqlTime().Compare(time), nil
 	default:
-		fVal, _ := time.ToNumber().Float64()
-		return d.compareFloat64(fVal)
-	}
-}
-
-func (d *Datum) compareRow(row []Datum) (int, error) {
-	var dRow []Datum
-	if d.k == KindRow {
-		dRow = d.GetRow()
-	} else {
-		dRow = []Datum{*d}
-	}
-	for i := 0; i < len(row) && i < len(dRow); i++ {
-		cmp, err := dRow[i].CompareDatum(row[i])
+		fVal, err := time.ToNumber().ToFloat64()
 		if err != nil {
-			return 0, err
+			return 0, errors.Trace(err)
 		}
-		if cmp != 0 {
-			return cmp, nil
-		}
+		return d.compareFloat64(sc, fVal)
 	}
-	return CompareInt64(int64(len(dRow)), int64(len(row))), nil
 }
 
-// ConvertTo converts datum to the target field type.
-func (d *Datum) ConvertTo(target *FieldType) (Datum, error) {
+// ConvertTo converts a datum to the target field type.
+func (d *Datum) ConvertTo(sc *variable.StatementContext, target *FieldType) (Datum, error) {
 	if d.k == KindNull {
 		return Datum{}, nil
 	}
@@ -575,28 +642,32 @@ func (d *Datum) ConvertTo(target *FieldType) (Datum, error) {
 	case mysql.TypeTiny, mysql.TypeShort, mysql.TypeInt24, mysql.TypeLong, mysql.TypeLonglong:
 		unsigned := mysql.HasUnsignedFlag(target.Flag)
 		if unsigned {
-			return d.convertToUint(target)
+			return d.convertToUint(sc, target)
 		}
-		return d.convertToInt(target)
+		return d.convertToInt(sc, target)
 	case mysql.TypeFloat, mysql.TypeDouble:
-		return d.convertToFloat(target)
+		return d.convertToFloat(sc, target)
 	case mysql.TypeBlob, mysql.TypeTinyBlob, mysql.TypeMediumBlob, mysql.TypeLongBlob,
 		mysql.TypeString, mysql.TypeVarchar, mysql.TypeVarString:
-		return d.convertToString(target)
-	case mysql.TypeTimestamp, mysql.TypeDatetime, mysql.TypeDate:
-		return d.convertToMysqlTime(target)
+		return d.convertToString(sc, target)
+	case mysql.TypeTimestamp:
+		return d.convertToMysqlTimestamp(sc, target)
+	case mysql.TypeDatetime, mysql.TypeDate, mysql.TypeNewDate:
+		return d.convertToMysqlTime(sc, target)
 	case mysql.TypeDuration:
-		return d.convertToMysqlDuration(target)
-	case mysql.TypeBit:
-		return d.convertToMysqlBit(target)
-	case mysql.TypeDecimal, mysql.TypeNewDecimal:
-		return d.convertToMysqlDecimal(target)
+		return d.convertToMysqlDuration(sc, target)
+	case mysql.TypeNewDecimal:
+		return d.convertToMysqlDecimal(sc, target)
 	case mysql.TypeYear:
-		return d.convertToMysqlYear(target)
+		return d.convertToMysqlYear(sc, target)
 	case mysql.TypeEnum:
-		return d.convertToMysqlEnum(target)
+		return d.convertToMysqlEnum(sc, target)
+	case mysql.TypeBit:
+		return d.convertToMysqlBit(sc, target)
 	case mysql.TypeSet:
-		return d.convertToMysqlSet(target)
+		return d.convertToMysqlSet(sc, target)
+	case mysql.TypeJSON:
+		return d.convertToMysqlJSON(sc, target)
 	case mysql.TypeNull:
 		return Datum{}, nil
 	default:
@@ -604,60 +675,66 @@ func (d *Datum) ConvertTo(target *FieldType) (Datum, error) {
 	}
 }
 
-func (d *Datum) convertToFloat(target *FieldType) (Datum, error) {
-	var ret Datum
+func (d *Datum) convertToFloat(sc *variable.StatementContext, target *FieldType) (Datum, error) {
+	var (
+		f   float64
+		ret Datum
+		err error
+	)
 	switch d.k {
 	case KindNull:
 		return ret, nil
 	case KindInt64:
-		ret.SetFloat64(float64(d.GetInt64()))
+		f = float64(d.GetInt64())
 	case KindUint64:
-		ret.SetFloat64(float64(d.GetUint64()))
+		f = float64(d.GetUint64())
 	case KindFloat32, KindFloat64:
-		ret.SetFloat64(d.GetFloat64())
+		f = d.GetFloat64()
 	case KindString, KindBytes:
-		f, err := StrToFloat(d.GetString())
-		if err != nil {
-			return ret, errors.Trace(err)
-		}
-		ret.SetFloat64(f)
+		f, err = StrToFloat(sc, d.GetString())
 	case KindMysqlTime:
-		f, _ := d.GetMysqlTime().ToNumber().Float64()
-		ret.SetFloat64(f)
+		f, err = d.GetMysqlTime().ToNumber().ToFloat64()
 	case KindMysqlDuration:
-		f, _ := d.GetMysqlDuration().ToNumber().Float64()
-		ret.SetFloat64(f)
+		f, err = d.GetMysqlDuration().ToNumber().ToFloat64()
 	case KindMysqlDecimal:
-		f, _ := d.GetMysqlDecimal().Float64()
-		ret.SetFloat64(f)
-	case KindMysqlHex:
-		ret.SetFloat64(d.GetMysqlHex().ToNumber())
-	case KindMysqlBit:
-		ret.SetFloat64(d.GetMysqlBit().ToNumber())
+		f, err = d.GetMysqlDecimal().ToFloat64()
 	case KindMysqlSet:
-		ret.SetFloat64(d.GetMysqlSet().ToNumber())
+		f = d.GetMysqlSet().ToNumber()
 	case KindMysqlEnum:
-		ret.SetFloat64(d.GetMysqlEnum().ToNumber())
+		f = d.GetMysqlEnum().ToNumber()
+	case KindBinaryLiteral, KindMysqlBit:
+		val, err1 := d.GetBinaryLiteral().ToInt()
+		f, err = float64(val), err1
+	case KindMysqlJSON:
+		f, err = ConvertJSONToFloat(sc, d.GetMysqlJSON())
 	default:
 		return invalidConv(d, target.Tp)
 	}
+	var err1 error
+	f, err1 = ProduceFloatWithSpecifiedTp(f, target, sc)
+	if err == nil && err1 != nil {
+		err = err1
+	}
+	if target.Tp == mysql.TypeFloat {
+		ret.SetFloat32(float32(f))
+	} else {
+		ret.SetFloat64(f)
+	}
+	return ret, errors.Trace(err)
+}
+
+// ProduceFloatWithSpecifiedTp produces a new float64 according to `flen` and `decimal`.
+func ProduceFloatWithSpecifiedTp(f float64, target *FieldType, sc *variable.StatementContext) (_ float64, err error) {
 	// For float and following double type, we will only truncate it for float(M, D) format.
 	// If no D is set, we will handle it like origin float whether M is set or not.
 	if target.Flen != UnspecifiedLength && target.Decimal != UnspecifiedLength {
-		x, err := TruncateFloat(ret.GetFloat64(), target.Flen, target.Decimal)
-		if err != nil {
-			return ret, errors.Trace(err)
-		}
-		if target.Tp == mysql.TypeFloat {
-			ret.SetFloat32(float32(x))
-		} else {
-			ret.SetFloat64(x)
-		}
+		f, err = TruncateFloat(f, target.Flen, target.Decimal)
+		err = sc.HandleOverflow(err, err)
 	}
-	return ret, nil
+	return f, errors.Trace(err)
 }
 
-func (d *Datum) convertToString(target *FieldType) (Datum, error) {
+func (d *Datum) convertToString(sc *variable.StatementContext, target *FieldType) (Datum, error) {
 	var ret Datum
 	var s string
 	switch d.k {
@@ -677,78 +754,71 @@ func (d *Datum) convertToString(target *FieldType) (Datum, error) {
 		s = d.GetMysqlDuration().String()
 	case KindMysqlDecimal:
 		s = d.GetMysqlDecimal().String()
-	case KindMysqlHex:
-		s = d.GetMysqlHex().ToString()
-	case KindMysqlBit:
-		s = d.GetMysqlBit().ToString()
 	case KindMysqlEnum:
 		s = d.GetMysqlEnum().String()
 	case KindMysqlSet:
 		s = d.GetMysqlSet().String()
+	case KindBinaryLiteral, KindMysqlBit:
+		s = d.GetBinaryLiteral().ToString()
+	case KindMysqlJSON:
+		s = d.GetMysqlJSON().String()
 	default:
 		return invalidConv(d, target.Tp)
 	}
-	// TODO: consider target.Charset/Collate
-	s = truncateStr(s, target.Flen)
+	s, err := ProduceStrWithSpecifiedTp(s, target, sc)
 	ret.SetString(s)
 	if target.Charset == charset.CharsetBin {
 		ret.k = KindBytes
 	}
-	return ret, nil
+	return ret, errors.Trace(err)
 }
 
-func (d *Datum) convertToInt(target *FieldType) (Datum, error) {
-	tp := target.Tp
-	lowerBound := signedLowerBound[tp]
-	upperBound := signedUpperBound[tp]
-	var (
-		val int64
-		err error
-		ret Datum
-	)
-	switch d.k {
-	case KindInt64:
-		val, err = convertIntToInt(d.GetInt64(), lowerBound, upperBound, tp)
-	case KindUint64:
-		val, err = convertUintToInt(d.GetUint64(), upperBound, tp)
-	case KindFloat32, KindFloat64:
-		val, err = convertFloatToInt(d.GetFloat64(), lowerBound, upperBound, tp)
-	case KindString, KindBytes:
-		fval, err1 := StrToFloat(d.GetString())
-		if err1 != nil {
-			return ret, errors.Trace(err1)
+// ProduceStrWithSpecifiedTp produces a new string according to `flen` and `chs`.
+func ProduceStrWithSpecifiedTp(s string, tp *FieldType, sc *variable.StatementContext) (_ string, err error) {
+	flen, chs := tp.Flen, tp.Charset
+	if flen >= 0 {
+		// Flen is the rune length, not binary length, for UTF8 charset, we need to calculate the
+		// rune count and truncate to Flen runes if it is too long.
+		if chs == charset.CharsetUTF8 || chs == charset.CharsetUTF8MB4 {
+			characterLen := len([]rune(s))
+			if characterLen > flen {
+				// 1. If len(s) is 0 and flen is 0, truncateLen will be 0, don't truncate s.
+				//    CREATE TABLE t (a char(0));
+				//    INSERT INTO t VALUES (``);
+				// 2. If len(s) is 10 and flen is 0, truncateLen will be 0 too, but we still need to truncate s.
+				//    SELECT 1, CAST(1234 AS CHAR(0));
+				// So truncateLen is not a suitable variable to determine to do truncate or not.
+				var runeCount int
+				var truncateLen int
+				for i := range s {
+					if runeCount == flen {
+						truncateLen = i
+						break
+					}
+					runeCount++
+				}
+				err = ErrDataTooLong.Gen("Data Too Long, field len %d, data len %d", flen, characterLen)
+				s = truncateStr(s, truncateLen)
+			}
+		} else if len(s) > flen {
+			err = ErrDataTooLong.Gen("Data Too Long, field len %d, data len %d", flen, len(s))
+			s = truncateStr(s, flen)
+		} else if tp.Tp == mysql.TypeString && IsBinaryStr(tp) && len(s) < flen {
+			padding := make([]byte, flen-len(s))
+			s = string(append([]byte(s), padding...))
 		}
-		val, err = convertFloatToInt(fval, lowerBound, upperBound, tp)
-	case KindMysqlTime:
-		val = d.GetMysqlTime().ToNumber().Round(0).IntPart()
-		val, err = convertIntToInt(val, lowerBound, upperBound, tp)
-	case KindMysqlDuration:
-		val = d.GetMysqlDuration().ToNumber().Round(0).IntPart()
-		val, err = convertIntToInt(val, lowerBound, upperBound, tp)
-	case KindMysqlDecimal:
-		fval, _ := d.GetMysqlDecimal().Float64()
-		val, err = convertFloatToInt(fval, lowerBound, upperBound, tp)
-	case KindMysqlHex:
-		val, err = convertFloatToInt(d.GetMysqlHex().ToNumber(), lowerBound, upperBound, tp)
-	case KindMysqlBit:
-		val, err = convertFloatToInt(d.GetMysqlBit().ToNumber(), lowerBound, upperBound, tp)
-	case KindMysqlEnum:
-		val, err = convertFloatToInt(d.GetMysqlEnum().ToNumber(), lowerBound, upperBound, tp)
-	case KindMysqlSet:
-		val, err = convertFloatToInt(d.GetMysqlSet().ToNumber(), lowerBound, upperBound, tp)
-	default:
-		return invalidConv(d, target.Tp)
 	}
-	ret.SetInt64(val)
-	if err != nil {
-		return ret, errors.Trace(err)
-	}
-	return ret, nil
+	return s, errors.Trace(sc.HandleTruncate(err))
 }
 
-func (d *Datum) convertToUint(target *FieldType) (Datum, error) {
+func (d *Datum) convertToInt(sc *variable.StatementContext, target *FieldType) (Datum, error) {
+	i64, err := d.toSignedInteger(sc, target.Tp)
+	return NewIntDatum(i64), errors.Trace(err)
+}
+
+func (d *Datum) convertToUint(sc *variable.StatementContext, target *FieldType) (Datum, error) {
 	tp := target.Tp
-	upperBound := unsignedUpperBound[tp]
+	upperBound := UnsignedUpperBound[tp]
 	var (
 		val uint64
 		err error
@@ -756,36 +826,55 @@ func (d *Datum) convertToUint(target *FieldType) (Datum, error) {
 	)
 	switch d.k {
 	case KindInt64:
-		val, err = convertIntToUint(d.GetInt64(), upperBound, tp)
+		val, err = ConvertIntToUint(d.GetInt64(), upperBound, tp)
 	case KindUint64:
-		val, err = convertUintToUint(d.GetUint64(), upperBound, tp)
+		val, err = ConvertUintToUint(d.GetUint64(), upperBound, tp)
 	case KindFloat32, KindFloat64:
-		val, err = convertFloatToUint(d.GetFloat64(), upperBound, tp)
+		val, err = ConvertFloatToUint(sc, d.GetFloat64(), upperBound, tp)
 	case KindString, KindBytes:
-		fval, err1 := StrToFloat(d.GetString())
-		if err1 != nil {
-			val, _ = convertFloatToUint(fval, upperBound, tp)
-			ret.SetUint64(val)
-			return ret, errors.Trace(err1)
+		val, err = StrToUint(sc, d.GetString())
+		if err != nil {
+			return ret, errors.Trace(err)
 		}
-		val, err = convertFloatToUint(fval, upperBound, tp)
+		val, err = ConvertUintToUint(val, upperBound, tp)
+		if err != nil {
+			return ret, errors.Trace(err)
+		}
+		ret.SetUint64(val)
 	case KindMysqlTime:
-		ival := d.GetMysqlTime().ToNumber().Round(0).IntPart()
-		val, err = convertIntToUint(ival, upperBound, tp)
+		dec := d.GetMysqlTime().ToNumber()
+		err = dec.Round(dec, 0, ModeHalfEven)
+		ival, err1 := dec.ToInt()
+		if err == nil {
+			err = err1
+		}
+		val, err1 = ConvertIntToUint(ival, upperBound, tp)
+		if err == nil {
+			err = err1
+		}
 	case KindMysqlDuration:
-		ival := d.GetMysqlDuration().ToNumber().Round(0).IntPart()
-		val, err = convertIntToUint(ival, upperBound, tp)
+		dec := d.GetMysqlDuration().ToNumber()
+		err = dec.Round(dec, 0, ModeHalfEven)
+		ival, err1 := dec.ToInt()
+		if err1 == nil {
+			val, err = ConvertIntToUint(ival, upperBound, tp)
+		}
 	case KindMysqlDecimal:
-		fval, _ := d.GetMysqlDecimal().Float64()
-		val, err = convertFloatToUint(fval, upperBound, tp)
-	case KindMysqlHex:
-		val, err = convertFloatToUint(d.GetMysqlHex().ToNumber(), upperBound, tp)
-	case KindMysqlBit:
-		val, err = convertFloatToUint(d.GetMysqlBit().ToNumber(), upperBound, tp)
+		fval, err1 := d.GetMysqlDecimal().ToFloat64()
+		val, err = ConvertFloatToUint(sc, fval, upperBound, tp)
+		if err == nil {
+			err = err1
+		}
 	case KindMysqlEnum:
-		val, err = convertFloatToUint(d.GetMysqlEnum().ToNumber(), upperBound, tp)
+		val, err = ConvertFloatToUint(sc, d.GetMysqlEnum().ToNumber(), upperBound, tp)
 	case KindMysqlSet:
-		val, err = convertFloatToUint(d.GetMysqlSet().ToNumber(), upperBound, tp)
+		val, err = ConvertFloatToUint(sc, d.GetMysqlSet().ToNumber(), upperBound, tp)
+	case KindBinaryLiteral, KindMysqlBit:
+		val, err = d.GetBinaryLiteral().ToInt()
+	case KindMysqlJSON:
+		var i64 int64
+		i64, err = ConvertJSONToInt(sc, d.GetMysqlJSON(), true)
+		val = uint64(i64)
 	default:
 		return invalidConv(d, target.Tp)
 	}
@@ -796,57 +885,106 @@ func (d *Datum) convertToUint(target *FieldType) (Datum, error) {
 	return ret, nil
 }
 
-func (d *Datum) convertToMysqlTime(target *FieldType) (Datum, error) {
-	tp := target.Tp
-	fsp := mysql.DefaultFsp
+func (d *Datum) convertToMysqlTimestamp(sc *variable.StatementContext, target *FieldType) (Datum, error) {
+	var (
+		ret Datum
+		t   Time
+		err error
+	)
+	fsp := DefaultFsp
 	if target.Decimal != UnspecifiedLength {
 		fsp = target.Decimal
 	}
-	var ret Datum
+	loc := sc.TimeZone
 	switch d.k {
 	case KindMysqlTime:
-		t, err := d.GetMysqlTime().Convert(tp)
-		if err != nil {
-			ret.SetValue(t)
-			return ret, errors.Trace(err)
+		t = d.GetMysqlTime()
+		if t.Type == mysql.TypeTimestamp {
+			switch {
+			case t.TimeZone == nil:
+				t.TimeZone = loc
+			case t.TimeZone == time.UTC:
+				// Convert to session timezone.
+				err = t.ConvertTimeZone(time.UTC, loc)
+				if err != nil {
+					return ret, errors.Trace(err)
+				}
+			case t.TimeZone == sc.TimeZone:
+			default:
+				return ret, errors.New("get a wrong input")
+			}
 		}
 		t, err = t.RoundFrac(fsp)
-		ret.SetValue(t)
-		if err != nil {
-			return ret, errors.Trace(err)
-		}
 	case KindMysqlDuration:
-		t, err := d.GetMysqlDuration().ConvertToTime(tp)
+		t, err = d.GetMysqlDuration().ConvertToTime(mysql.TypeTimestamp)
 		if err != nil {
 			ret.SetValue(t)
 			return ret, errors.Trace(err)
 		}
 		t, err = t.RoundFrac(fsp)
-		ret.SetValue(t)
-		if err != nil {
-			return ret, errors.Trace(err)
-		}
 	case KindString, KindBytes:
-		t, err := mysql.ParseTime(d.GetString(), tp, fsp)
-		ret.SetValue(t)
-		if err != nil {
-			return ret, errors.Trace(err)
-		}
+		t, err = ParseTime(sc, d.GetString(), mysql.TypeTimestamp, fsp)
 	case KindInt64:
-		t, err := mysql.ParseTimeFromNum(d.GetInt64(), tp, fsp)
-		ret.SetValue(t)
-		if err != nil {
-			return ret, errors.Trace(err)
-		}
+		t, err = ParseTimeFromNum(sc, d.GetInt64(), mysql.TypeTimestamp, fsp)
 	default:
-		return invalidConv(d, tp)
+		return invalidConv(d, mysql.TypeTimestamp)
+	}
+	t.Type = mysql.TypeTimestamp
+	t.TimeZone = loc
+	ret.SetMysqlTime(t)
+	if err != nil {
+		return ret, errors.Trace(err)
 	}
 	return ret, nil
 }
 
-func (d *Datum) convertToMysqlDuration(target *FieldType) (Datum, error) {
+func (d *Datum) convertToMysqlTime(sc *variable.StatementContext, target *FieldType) (Datum, error) {
 	tp := target.Tp
-	fsp := mysql.DefaultFsp
+	fsp := DefaultFsp
+	if target.Decimal != UnspecifiedLength {
+		fsp = target.Decimal
+	}
+	var (
+		ret Datum
+		t   Time
+		err error
+	)
+	switch d.k {
+	case KindMysqlTime:
+		t, err = d.GetMysqlTime().Convert(sc, tp)
+		if err != nil {
+			ret.SetValue(t)
+			return ret, errors.Trace(err)
+		}
+		t, err = t.RoundFrac(fsp)
+	case KindMysqlDuration:
+		t, err = d.GetMysqlDuration().ConvertToTime(tp)
+		if err != nil {
+			ret.SetValue(t)
+			return ret, errors.Trace(err)
+		}
+		t, err = t.RoundFrac(fsp)
+	case KindString, KindBytes:
+		t, err = ParseTime(sc, d.GetString(), tp, fsp)
+	case KindInt64:
+		t, err = ParseTimeFromNum(sc, d.GetInt64(), tp, fsp)
+	default:
+		return invalidConv(d, tp)
+	}
+	if tp == mysql.TypeDate {
+		// Truncate hh:mm:ss part if the type is Date.
+		t.Time = FromDate(t.Time.Year(), t.Time.Month(), t.Time.Day(), 0, 0, 0, 0)
+	}
+	ret.SetValue(t)
+	if err != nil {
+		return ret, errors.Trace(err)
+	}
+	return ret, nil
+}
+
+func (d *Datum) convertToMysqlDuration(sc *variable.StatementContext, target *FieldType) (Datum, error) {
+	tp := target.Tp
+	fsp := DefaultFsp
 	if target.Decimal != UnspecifiedLength {
 		fsp = target.Decimal
 	}
@@ -870,7 +1008,7 @@ func (d *Datum) convertToMysqlDuration(target *FieldType) (Datum, error) {
 			return ret, errors.Trace(err)
 		}
 	case KindString, KindBytes:
-		t, err := mysql.ParseDuration(d.GetString(), fsp)
+		t, err := ParseDuration(d.GetString(), fsp)
 		ret.SetValue(t)
 		if err != nil {
 			return ret, errors.Trace(err)
@@ -881,47 +1019,91 @@ func (d *Datum) convertToMysqlDuration(target *FieldType) (Datum, error) {
 	return ret, nil
 }
 
-func (d *Datum) convertToMysqlDecimal(target *FieldType) (Datum, error) {
+func (d *Datum) convertToMysqlDecimal(sc *variable.StatementContext, target *FieldType) (Datum, error) {
 	var ret Datum
-	var dec mysql.Decimal
+	ret.SetLength(target.Flen)
+	ret.SetFrac(target.Decimal)
+	var dec = &MyDecimal{}
+	var err error
 	switch d.k {
 	case KindInt64:
-		dec = mysql.NewDecimalFromInt(d.GetInt64(), 0)
+		dec.FromInt(d.GetInt64())
 	case KindUint64:
-		dec = mysql.NewDecimalFromUint(d.GetUint64(), 0)
+		dec.FromUint(d.GetUint64())
 	case KindFloat32, KindFloat64:
-		dec = mysql.NewDecimalFromFloat(d.GetFloat64())
+		err = dec.FromFloat64(d.GetFloat64())
 	case KindString, KindBytes:
-		var err error
-		dec, err = mysql.ParseDecimal(d.GetString())
-		if err != nil {
-			return ret, errors.Trace(err)
-		}
+		err = dec.FromString(d.GetBytes())
 	case KindMysqlDecimal:
-		dec = d.GetMysqlDecimal()
+		*dec = *d.GetMysqlDecimal()
 	case KindMysqlTime:
 		dec = d.GetMysqlTime().ToNumber()
 	case KindMysqlDuration:
 		dec = d.GetMysqlDuration().ToNumber()
-	case KindMysqlBit:
-		dec = mysql.NewDecimalFromFloat(d.GetMysqlBit().ToNumber())
 	case KindMysqlEnum:
-		dec = mysql.NewDecimalFromFloat(d.GetMysqlEnum().ToNumber())
-	case KindMysqlHex:
-		dec = mysql.NewDecimalFromFloat(d.GetMysqlHex().ToNumber())
+		err = dec.FromFloat64(d.GetMysqlEnum().ToNumber())
 	case KindMysqlSet:
-		dec = mysql.NewDecimalFromFloat(d.GetMysqlSet().ToNumber())
+		err = dec.FromFloat64(d.GetMysqlSet().ToNumber())
+	case KindBinaryLiteral, KindMysqlBit:
+		val, err1 := d.GetBinaryLiteral().ToInt()
+		err = err1
+		dec.FromUint(val)
+	case KindMysqlJSON:
+		f, err1 := ConvertJSONToFloat(sc, d.GetMysqlJSON())
+		if err1 != nil {
+			return ret, errors.Trace(err1)
+		}
+		err = dec.FromFloat64(f)
 	default:
 		return invalidConv(d, target.Tp)
 	}
-	if target.Decimal != UnspecifiedLength {
-		dec = dec.Round(int32(target.Decimal))
+	var err1 error
+	dec, err1 = ProduceDecWithSpecifiedTp(dec, target, sc)
+	if err == nil && err1 != nil {
+		err = err1
 	}
 	ret.SetValue(dec)
-	return ret, nil
+	return ret, errors.Trace(err)
 }
 
-func (d *Datum) convertToMysqlYear(target *FieldType) (Datum, error) {
+// ProduceDecWithSpecifiedTp produces a new decimal according to `flen` and `decimal`.
+func ProduceDecWithSpecifiedTp(dec *MyDecimal, tp *FieldType, sc *variable.StatementContext) (_ *MyDecimal, err error) {
+	flen, decimal := tp.Flen, tp.Decimal
+	if flen != UnspecifiedLength && decimal != UnspecifiedLength {
+		if flen < decimal {
+			return nil, ErrMBiggerThanD.GenByArgs("")
+		}
+		prec, frac := dec.PrecisionAndFrac()
+		if !dec.IsZero() && prec-frac > flen-decimal {
+			dec = NewMaxOrMinDec(dec.IsNegative(), flen, decimal)
+			// select (cast 111 as decimal(1)) causes a warning in MySQL.
+			err = ErrOverflow.GenByArgs("DECIMAL", fmt.Sprintf("(%d, %d)", flen, decimal))
+		} else if frac != decimal {
+			old := *dec
+			err = dec.Round(dec, decimal, ModeHalfEven)
+			if err != nil {
+				return nil, errors.Trace(err)
+			}
+			if !dec.IsZero() && frac > decimal && dec.Compare(&old) != 0 {
+				if sc.InInsertStmt {
+					// fix https://github.com/pingcap/tidb/issues/3895
+					sc.AppendWarning(ErrTruncated)
+					err = nil
+				} else {
+					err = sc.HandleTruncate(ErrTruncated)
+				}
+			}
+		}
+	}
+
+	if ErrOverflow.Equal(err) {
+		// TODO: warnErr need to be ErrWarnDataOutOfRange
+		err = sc.HandleOverflow(err, err)
+	}
+	return dec, errors.Trace(err)
+}
+
+func (d *Datum) convertToMysqlYear(sc *variable.StatementContext, target *FieldType) (Datum, error) {
 	var (
 		ret Datum
 		y   int64
@@ -929,19 +1111,22 @@ func (d *Datum) convertToMysqlYear(target *FieldType) (Datum, error) {
 	)
 	switch d.k {
 	case KindString, KindBytes:
-		y, err = StrToInt(d.GetString())
+		y, err = StrToInt(sc, d.GetString())
+		if err != nil {
+			return ret, errors.Trace(err)
+		}
 	case KindMysqlTime:
-		y = int64(d.GetMysqlTime().Year())
+		y = int64(d.GetMysqlTime().Time.Year())
 	case KindMysqlDuration:
 		y = int64(time.Now().Year())
 	default:
-		ret, err = d.convertToInt(NewFieldType(mysql.TypeLonglong))
+		ret, err = d.convertToInt(sc, NewFieldType(mysql.TypeLonglong))
 		if err != nil {
 			return invalidConv(d, target.Tp)
 		}
 		y = ret.GetInt64()
 	}
-	y, err = mysql.AdjustYear(y)
+	y, err = AdjustYear(y)
 	if err != nil {
 		return invalidConv(d, target.Tp)
 	}
@@ -949,68 +1134,65 @@ func (d *Datum) convertToMysqlYear(target *FieldType) (Datum, error) {
 	return ret, nil
 }
 
-func (d *Datum) convertToMysqlBit(target *FieldType) (Datum, error) {
-	x, err := d.convertToUint(target)
-	if err != nil {
-		return x, errors.Trace(err)
-	}
-	// check bit boundary, if bit has n width, the boundary is
-	// in [0, (1 << n) - 1]
-	width := target.Flen
-	if width == 0 || width == mysql.UnspecifiedBitWidth {
-		width = mysql.MinBitWidth
-	}
-	maxValue := uint64(1)<<uint64(width) - 1
-	val := x.GetUint64()
-	if val > maxValue {
-		x.SetUint64(maxValue)
-		return x, overflow(val, target.Tp)
-	}
+func (d *Datum) convertToMysqlBit(sc *variable.StatementContext, target *FieldType) (Datum, error) {
 	var ret Datum
-	ret.SetValue(mysql.Bit{Value: val, Width: width})
-	return ret, nil
+	var uintValue uint64
+	var err error
+	switch d.k {
+	case KindString, KindBytes:
+		uintValue, err = BinaryLiteral(d.b).ToInt()
+	default:
+		uintDatum, err1 := d.convertToUint(sc, target)
+		uintValue, err = uintDatum.GetUint64(), err1
+	}
+	if target.Flen < 64 && uintValue >= 1<<(uint64(target.Flen)) {
+		return Datum{}, errors.Trace(ErrOverflow.GenByArgs("BIT", fmt.Sprintf("(%d)", target.Flen)))
+	}
+	byteSize := (target.Flen + 7) >> 3
+	ret.SetMysqlBit(NewBinaryLiteralFromUint(uintValue, byteSize))
+	return ret, errors.Trace(err)
 }
 
-func (d *Datum) convertToMysqlEnum(target *FieldType) (Datum, error) {
+func (d *Datum) convertToMysqlEnum(sc *variable.StatementContext, target *FieldType) (Datum, error) {
 	var (
 		ret Datum
-		e   mysql.Enum
+		e   Enum
 		err error
 	)
 	switch d.k {
 	case KindString, KindBytes:
-		e, err = mysql.ParseEnumName(target.Elems, d.GetString())
+		e, err = ParseEnumName(target.Elems, d.GetString())
 	default:
 		var uintDatum Datum
-		uintDatum, err = d.convertToUint(target)
+		uintDatum, err = d.convertToUint(sc, target)
 		if err != nil {
 			return ret, errors.Trace(err)
 		}
-		e, err = mysql.ParseEnumValue(target.Elems, uintDatum.GetUint64())
+		e, err = ParseEnumValue(target.Elems, uintDatum.GetUint64())
 	}
 	if err != nil {
-		return invalidConv(d, target.Tp)
+		err = errors.Wrap(err, ErrTruncated)
 	}
 	ret.SetValue(e)
-	return ret, nil
+	return ret, err
 }
 
-func (d *Datum) convertToMysqlSet(target *FieldType) (Datum, error) {
+func (d *Datum) convertToMysqlSet(sc *variable.StatementContext, target *FieldType) (Datum, error) {
 	var (
 		ret Datum
-		s   mysql.Set
+		s   Set
 		err error
 	)
 	switch d.k {
 	case KindString, KindBytes:
-		s, err = mysql.ParseSetName(target.Elems, d.GetString())
+		s, err = ParseSetName(target.Elems, d.GetString())
 	default:
 		var uintDatum Datum
-		uintDatum, err = d.convertToUint(target)
+		uintDatum, err = d.convertToUint(sc, target)
 		if err != nil {
 			return ret, errors.Trace(err)
 		}
-		s, err = mysql.ParseSetValue(target.Elems, uintDatum.GetUint64())
+		s, err = ParseSetValue(target.Elems, uintDatum.GetUint64())
 	}
 
 	if err != nil {
@@ -1020,9 +1202,45 @@ func (d *Datum) convertToMysqlSet(target *FieldType) (Datum, error) {
 	return ret, nil
 }
 
+func (d *Datum) convertToMysqlJSON(sc *variable.StatementContext, target *FieldType) (ret Datum, err error) {
+	switch d.k {
+	case KindString, KindBytes:
+		var j json.JSON
+		if j, err = json.ParseFromString(d.GetString()); err == nil {
+			ret.SetMysqlJSON(j)
+		}
+	case KindInt64:
+		i64 := d.GetInt64()
+		ret.SetMysqlJSON(json.CreateJSON(i64))
+	case KindUint64:
+		u64 := d.GetUint64()
+		ret.SetMysqlJSON(json.CreateJSON(u64))
+	case KindFloat32, KindFloat64:
+		f64 := d.GetFloat64()
+		ret.SetMysqlJSON(json.CreateJSON(f64))
+	case KindMysqlDecimal:
+		var f64 float64
+		if f64, err = d.GetMysqlDecimal().ToFloat64(); err == nil {
+			ret.SetMysqlJSON(json.CreateJSON(f64))
+		}
+	case KindMysqlJSON:
+		ret = *d
+	default:
+		var s string
+		if s, err = d.ToString(); err == nil {
+			// TODO: fix precision of MysqlTime. For example,
+			// On MySQL 5.7 CAST(NOW() AS JSON) -> "2011-11-11 11:11:11.111111",
+			// But now we can only return "2011-11-11 11:11:11".
+			ret.SetMysqlJSON(json.CreateJSON(s))
+		}
+	}
+	return ret, errors.Trace(err)
+}
+
 // ToBool converts to a bool.
 // We will use 1 for true, and 0 for false.
-func (d *Datum) ToBool() (int64, error) {
+func (d *Datum) ToBool(sc *variable.StatementContext) (int64, error) {
+	var err error
 	isZero := false
 	switch d.Kind() {
 	case KindInt64:
@@ -1030,112 +1248,170 @@ func (d *Datum) ToBool() (int64, error) {
 	case KindUint64:
 		isZero = (d.GetUint64() == 0)
 	case KindFloat32:
-		isZero = (d.GetFloat32() == 0)
+		isZero = (RoundFloat(d.GetFloat64()) == 0)
 	case KindFloat64:
-		isZero = (d.GetFloat64() == 0)
-	case KindString:
-		s := d.GetString()
-		if len(s) == 0 {
-			isZero = true
-		}
-		n, err := StrToInt(s)
-		if err != nil {
-			return 0, err
-		}
-		isZero = (n == 0)
-	case KindBytes:
-		bs := d.GetBytes()
-		if len(bs) == 0 {
-			isZero = true
-		} else {
-			n, err := StrToInt(string(bs))
-			if err != nil {
-				return 0, err
-			}
-			isZero = (n == 0)
-		}
+		isZero = (RoundFloat(d.GetFloat64()) == 0)
+	case KindString, KindBytes:
+		iVal, err1 := StrToInt(sc, d.GetString())
+		isZero, err = (iVal == 0), err1
 	case KindMysqlTime:
 		isZero = d.GetMysqlTime().IsZero()
 	case KindMysqlDuration:
 		isZero = (d.GetMysqlDuration().Duration == 0)
 	case KindMysqlDecimal:
-		v, _ := d.GetMysqlDecimal().Float64()
-		isZero = (v == 0)
-	case KindMysqlHex:
-		isZero = (d.GetMysqlHex().ToNumber() == 0)
-	case KindMysqlBit:
-		isZero = (d.GetMysqlBit().ToNumber() == 0)
+		v, err1 := d.GetMysqlDecimal().ToFloat64()
+		isZero, err = (RoundFloat(v) == 0), err1
 	case KindMysqlEnum:
 		isZero = (d.GetMysqlEnum().ToNumber() == 0)
 	case KindMysqlSet:
 		isZero = (d.GetMysqlSet().ToNumber() == 0)
+	case KindBinaryLiteral, KindMysqlBit:
+		val, err1 := d.GetBinaryLiteral().ToInt()
+		isZero, err = (val == 0), err1
 	default:
 		return 0, errors.Errorf("cannot convert %v(type %T) to bool", d.GetValue(), d.GetValue())
 	}
+	var ret int64
 	if isZero {
-		return 0, nil
+		ret = 0
+	} else {
+		ret = 1
 	}
-	return 1, nil
+	if err != nil {
+		return ret, errors.Trace(err)
+	}
+	return ret, nil
+}
+
+// ConvertDatumToDecimal converts datum to decimal.
+func ConvertDatumToDecimal(sc *variable.StatementContext, d Datum) (*MyDecimal, error) {
+	dec := new(MyDecimal)
+	var err error
+	switch d.Kind() {
+	case KindInt64:
+		dec.FromInt(d.GetInt64())
+	case KindUint64:
+		dec.FromUint(d.GetUint64())
+	case KindFloat32:
+		err = dec.FromFloat64(float64(d.GetFloat32()))
+	case KindFloat64:
+		err = dec.FromFloat64(d.GetFloat64())
+	case KindString:
+		err = sc.HandleTruncate(dec.FromString(d.GetBytes()))
+	case KindMysqlDecimal:
+		*dec = *d.GetMysqlDecimal()
+	case KindMysqlEnum:
+		dec.FromUint(d.GetMysqlEnum().Value)
+	case KindMysqlSet:
+		dec.FromUint(d.GetMysqlSet().Value)
+	case KindBinaryLiteral, KindMysqlBit:
+		val, err1 := d.GetBinaryLiteral().ToInt()
+		dec.FromUint(val)
+		err = err1
+	case KindMysqlJSON:
+		f, err1 := ConvertJSONToFloat(sc, d.GetMysqlJSON())
+		if err1 != nil {
+			return nil, errors.Trace(err1)
+		}
+		err = dec.FromFloat64(f)
+	default:
+		err = fmt.Errorf("can't convert %v to decimal", d.GetValue())
+	}
+	return dec, err
+}
+
+// ToDecimal converts to a decimal.
+func (d *Datum) ToDecimal(sc *variable.StatementContext) (*MyDecimal, error) {
+	switch d.Kind() {
+	case KindMysqlTime:
+		return d.GetMysqlTime().ToNumber(), nil
+	case KindMysqlDuration:
+		return d.GetMysqlDuration().ToNumber(), nil
+	default:
+		return ConvertDatumToDecimal(sc, *d)
+	}
 }
 
 // ToInt64 converts to a int64.
-func (d *Datum) ToInt64() (int64, error) {
-	tp := mysql.TypeLonglong
-	lowerBound := signedLowerBound[tp]
-	upperBound := signedUpperBound[tp]
+func (d *Datum) ToInt64(sc *variable.StatementContext) (int64, error) {
+	return d.toSignedInteger(sc, mysql.TypeLonglong)
+}
+
+func (d *Datum) toSignedInteger(sc *variable.StatementContext, tp byte) (int64, error) {
+	lowerBound := SignedLowerBound[tp]
+	upperBound := SignedUpperBound[tp]
 	switch d.Kind() {
 	case KindInt64:
-		return convertIntToInt(d.GetInt64(), lowerBound, upperBound, tp)
+		return ConvertIntToInt(d.GetInt64(), lowerBound, upperBound, tp)
 	case KindUint64:
-		return convertUintToInt(d.GetUint64(), upperBound, tp)
+		return ConvertUintToInt(d.GetUint64(), upperBound, tp)
 	case KindFloat32:
-		return convertFloatToInt(float64(d.GetFloat32()), lowerBound, upperBound, tp)
+		return ConvertFloatToInt(sc, float64(d.GetFloat32()), lowerBound, upperBound, tp)
 	case KindFloat64:
-		return convertFloatToInt(d.GetFloat64(), lowerBound, upperBound, tp)
-	case KindString:
-		s := d.GetString()
-		fval, err := StrToFloat(s)
-		if err != nil {
-			return 0, errors.Trace(err)
+		return ConvertFloatToInt(sc, d.GetFloat64(), lowerBound, upperBound, tp)
+	case KindString, KindBytes:
+		iVal, err := StrToInt(sc, d.GetString())
+		iVal, err2 := ConvertIntToInt(iVal, lowerBound, upperBound, tp)
+		if err == nil {
+			err = err2
 		}
-		return convertFloatToInt(fval, lowerBound, upperBound, tp)
-	case KindBytes:
-		s := string(d.GetBytes())
-		fval, err := StrToFloat(s)
-		if err != nil {
-			return 0, errors.Trace(err)
-		}
-		return convertFloatToInt(fval, lowerBound, upperBound, tp)
+		return iVal, errors.Trace(err)
 	case KindMysqlTime:
 		// 2011-11-10 11:11:11.999999 -> 20111110111112
-		ival := d.GetMysqlTime().ToNumber().Round(0).IntPart()
-		return convertIntToInt(ival, lowerBound, upperBound, tp)
+		// 2011-11-10 11:59:59.999999 -> 20111110120000
+		t, err := d.GetMysqlTime().RoundFrac(DefaultFsp)
+		if err != nil {
+			return 0, errors.Trace(err)
+		}
+		ival, err := t.ToNumber().ToInt()
+		ival, err2 := ConvertIntToInt(ival, lowerBound, upperBound, tp)
+		if err == nil {
+			err = err2
+		}
+		return ival, err
 	case KindMysqlDuration:
 		// 11:11:11.999999 -> 111112
-		ival := d.GetMysqlDuration().ToNumber().Round(0).IntPart()
-		return convertIntToInt(ival, lowerBound, upperBound, tp)
+		// 11:59:59.999999 -> 120000
+		dur, err := d.GetMysqlDuration().RoundFrac(DefaultFsp)
+		if err != nil {
+			return 0, errors.Trace(err)
+		}
+		ival, err := dur.ToNumber().ToInt()
+		ival, err2 := ConvertIntToInt(ival, lowerBound, upperBound, tp)
+		if err == nil {
+			err = err2
+		}
+		return ival, err
 	case KindMysqlDecimal:
-		fval, _ := d.GetMysqlDecimal().Float64()
-		return convertFloatToInt(fval, lowerBound, upperBound, tp)
-	case KindMysqlHex:
-		fval := d.GetMysqlHex().ToNumber()
-		return convertFloatToInt(fval, lowerBound, upperBound, tp)
-	case KindMysqlBit:
-		fval := d.GetMysqlBit().ToNumber()
-		return convertFloatToInt(fval, lowerBound, upperBound, tp)
+		var to MyDecimal
+		err := d.GetMysqlDecimal().Round(&to, 0, ModeHalfEven)
+		ival, err1 := to.ToInt()
+		if err == nil {
+			err = err1
+		}
+		ival, err2 := ConvertIntToInt(ival, lowerBound, upperBound, tp)
+		if err == nil {
+			err = err2
+		}
+		return ival, err
 	case KindMysqlEnum:
 		fval := d.GetMysqlEnum().ToNumber()
-		return convertFloatToInt(fval, lowerBound, upperBound, tp)
+		return ConvertFloatToInt(sc, fval, lowerBound, upperBound, tp)
 	case KindMysqlSet:
 		fval := d.GetMysqlSet().ToNumber()
-		return convertFloatToInt(fval, lowerBound, upperBound, tp)
+		return ConvertFloatToInt(sc, fval, lowerBound, upperBound, tp)
+	case KindMysqlJSON:
+		return ConvertJSONToInt(sc, d.GetMysqlJSON(), false)
+	case KindBinaryLiteral, KindMysqlBit:
+		val, err := d.GetBinaryLiteral().ToInt()
+		return int64(val), err
 	default:
 		return 0, errors.Errorf("cannot convert %v(type %T) to int64", d.GetValue(), d.GetValue())
 	}
 }
 
 // ToFloat64 converts to a float64
-func (d *Datum) ToFloat64() (float64, error) {
+func (d *Datum) ToFloat64(sc *variable.StatementContext) (float64, error) {
 	switch d.Kind() {
 	case KindInt64:
 		return float64(d.GetInt64()), nil
@@ -1146,26 +1422,25 @@ func (d *Datum) ToFloat64() (float64, error) {
 	case KindFloat64:
 		return d.GetFloat64(), nil
 	case KindString:
-		return StrToFloat(d.GetString())
+		return StrToFloat(sc, d.GetString())
 	case KindBytes:
-		return StrToFloat(string(d.GetBytes()))
+		return StrToFloat(sc, string(d.GetBytes()))
 	case KindMysqlTime:
-		f, _ := d.GetMysqlTime().ToNumber().Float64()
-		return f, nil
+		f, err := d.GetMysqlTime().ToNumber().ToFloat64()
+		return f, err
 	case KindMysqlDuration:
-		f, _ := d.GetMysqlDuration().ToNumber().Float64()
-		return f, nil
+		f, err := d.GetMysqlDuration().ToNumber().ToFloat64()
+		return f, err
 	case KindMysqlDecimal:
-		f, _ := d.GetMysqlDecimal().Float64()
-		return f, nil
-	case KindMysqlHex:
-		return d.GetMysqlHex().ToNumber(), nil
-	case KindMysqlBit:
-		return d.GetMysqlBit().ToNumber(), nil
+		f, err := d.GetMysqlDecimal().ToFloat64()
+		return f, err
 	case KindMysqlEnum:
 		return d.GetMysqlEnum().ToNumber(), nil
 	case KindMysqlSet:
 		return d.GetMysqlSet().ToNumber(), nil
+	case KindBinaryLiteral, KindMysqlBit:
+		val, err := d.GetBinaryLiteral().ToInt()
+		return float64(val), err
 	default:
 		return 0, errors.Errorf("cannot convert %v(type %T) to float64", d.GetValue(), d.GetValue())
 	}
@@ -1181,7 +1456,7 @@ func (d *Datum) ToString() (string, error) {
 	case KindFloat32:
 		return strconv.FormatFloat(float64(d.GetFloat32()), 'f', -1, 32), nil
 	case KindFloat64:
-		return strconv.FormatFloat(float64(d.GetFloat64()), 'f', -1, 64), nil
+		return strconv.FormatFloat(d.GetFloat64(), 'f', -1, 64), nil
 	case KindString:
 		return d.GetString(), nil
 	case KindBytes:
@@ -1192,21 +1467,152 @@ func (d *Datum) ToString() (string, error) {
 		return d.GetMysqlDuration().String(), nil
 	case KindMysqlDecimal:
 		return d.GetMysqlDecimal().String(), nil
-	case KindMysqlHex:
-		return d.GetMysqlHex().ToString(), nil
-	case KindMysqlBit:
-		return d.GetMysqlBit().ToString(), nil
 	case KindMysqlEnum:
 		return d.GetMysqlEnum().String(), nil
 	case KindMysqlSet:
 		return d.GetMysqlSet().String(), nil
+	case KindMysqlJSON:
+		return d.GetMysqlJSON().String(), nil
+	case KindBinaryLiteral, KindMysqlBit:
+		return d.GetBinaryLiteral().ToString(), nil
 	default:
 		return "", errors.Errorf("cannot convert %v(type %T) to string", d.GetValue(), d.GetValue())
 	}
 }
 
+// ToBytes gets the bytes representation of the datum.
+func (d *Datum) ToBytes() ([]byte, error) {
+	switch d.k {
+	case KindString, KindBytes:
+		return d.GetBytes(), nil
+	default:
+		str, err := d.ToString()
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+		return []byte(str), nil
+	}
+}
+
+// ToMysqlJSON is similar to convertToMysqlJSON, except the
+// latter parses from string, but the former uses it as primitive.
+func (d *Datum) ToMysqlJSON() (j json.JSON, err error) {
+	var in interface{}
+	switch d.Kind() {
+	case KindMysqlJSON:
+		j = d.x.(json.JSON)
+		return
+	case KindInt64:
+		in = d.GetInt64()
+	case KindUint64:
+		in = d.GetUint64()
+	case KindFloat32, KindFloat64:
+		in = d.GetFloat64()
+	case KindMysqlDecimal:
+		in, err = d.GetMysqlDecimal().ToFloat64()
+	case KindString, KindBytes:
+		in = d.GetString()
+	case KindBinaryLiteral, KindMysqlBit:
+		in = d.GetBinaryLiteral().ToString()
+	case KindNull:
+		in = nil
+	default:
+		in, err = d.ToString()
+		if err != nil {
+			err = errors.Trace(err)
+			return
+		}
+	}
+	j = json.CreateJSON(in)
+	return
+}
+
 func invalidConv(d *Datum, tp byte) (Datum, error) {
+	// TODO: should format Datum better.
 	return Datum{}, errors.Errorf("cannot convert %v to type %s", d, TypeStr(tp))
+}
+
+func (d *Datum) convergeType(hasUint, hasDecimal, hasFloat *bool) (x Datum) {
+	x = *d
+	switch d.Kind() {
+	case KindUint64:
+		*hasUint = true
+	case KindFloat32:
+		f := d.GetFloat32()
+		x.SetFloat64(float64(f))
+		*hasFloat = true
+	case KindFloat64:
+		*hasFloat = true
+	case KindMysqlDecimal:
+		*hasDecimal = true
+	}
+	return x
+}
+
+// CoerceDatum changes type.
+// If a or b is Float, changes the both to Float.
+// Else if a or b is Decimal, changes the both to Decimal.
+// Else if a or b is Uint and op is not div, mod, or intDiv changes the both to Uint.
+func CoerceDatum(sc *variable.StatementContext, a, b Datum) (x, y Datum, err error) {
+	if a.IsNull() || b.IsNull() {
+		return x, y, nil
+	}
+	var hasUint, hasDecimal, hasFloat bool
+	x = a.convergeType(&hasUint, &hasDecimal, &hasFloat)
+	y = b.convergeType(&hasUint, &hasDecimal, &hasFloat)
+	if hasFloat {
+		switch x.Kind() {
+		case KindInt64:
+			x.SetFloat64(float64(x.GetInt64()))
+		case KindUint64:
+			x.SetFloat64(float64(x.GetUint64()))
+		case KindMysqlEnum:
+			x.SetFloat64(x.GetMysqlEnum().ToNumber())
+		case KindMysqlSet:
+			x.SetFloat64(x.GetMysqlSet().ToNumber())
+		case KindMysqlDecimal:
+			var fval float64
+			fval, err = x.ToFloat64(sc)
+			if err != nil {
+				return x, y, errors.Trace(err)
+			}
+			x.SetFloat64(fval)
+		}
+		switch y.Kind() {
+		case KindInt64:
+			y.SetFloat64(float64(y.GetInt64()))
+		case KindUint64:
+			y.SetFloat64(float64(y.GetUint64()))
+		case KindBinaryLiteral, KindMysqlBit:
+			val, err1 := y.GetBinaryLiteral().ToInt()
+			err = err1
+			y.SetFloat64(float64(val))
+		case KindMysqlEnum:
+			y.SetFloat64(y.GetMysqlEnum().ToNumber())
+		case KindMysqlSet:
+			y.SetFloat64(y.GetMysqlSet().ToNumber())
+		case KindMysqlDecimal:
+			var fval float64
+			fval, err = y.ToFloat64(sc)
+			if err != nil {
+				return x, y, errors.Trace(err)
+			}
+			y.SetFloat64(fval)
+		}
+	} else if hasDecimal {
+		var dec *MyDecimal
+		dec, err = ConvertDatumToDecimal(sc, x)
+		if err != nil {
+			return x, y, errors.Trace(err)
+		}
+		x.SetMysqlDecimal(dec)
+		dec, err = ConvertDatumToDecimal(sc, y)
+		if err != nil {
+			return x, y, errors.Trace(err)
+		}
+		y.SetMysqlDecimal(dec)
+	}
+	return
 }
 
 // NewDatum creates a new Datum from an interface{}.
@@ -1220,6 +1626,72 @@ func NewDatum(in interface{}) (d Datum) {
 	return d
 }
 
+// NewIntDatum creates a new Datum from an int64 value.
+func NewIntDatum(i int64) (d Datum) {
+	d.SetInt64(i)
+	return d
+}
+
+// NewUintDatum creates a new Datum from an uint64 value.
+func NewUintDatum(i uint64) (d Datum) {
+	d.SetUint64(i)
+	return d
+}
+
+// NewBytesDatum creates a new Datum from a byte slice.
+func NewBytesDatum(b []byte) (d Datum) {
+	d.SetBytes(b)
+	return d
+}
+
+// NewStringDatum creates a new Datum from a string.
+func NewStringDatum(s string) (d Datum) {
+	d.SetString(s)
+	return d
+}
+
+// NewFloat64Datum creates a new Datum from a float64 value.
+func NewFloat64Datum(f float64) (d Datum) {
+	d.SetFloat64(f)
+	return d
+}
+
+// NewFloat32Datum creates a new Datum from a float32 value.
+func NewFloat32Datum(f float32) (d Datum) {
+	d.SetFloat32(f)
+	return d
+}
+
+// NewDurationDatum creates a new Datum from a Duration value.
+func NewDurationDatum(dur Duration) (d Datum) {
+	d.SetMysqlDuration(dur)
+	return d
+}
+
+// NewTimeDatum creates a new Time from a Time value.
+func NewTimeDatum(t Time) (d Datum) {
+	d.SetMysqlTime(t)
+	return d
+}
+
+// NewDecimalDatum creates a new Datum form a MyDecimal value.
+func NewDecimalDatum(dec *MyDecimal) (d Datum) {
+	d.SetMysqlDecimal(dec)
+	return d
+}
+
+// NewBinaryLiteralDatum creates a new BinaryLiteral Datum for a BinaryLiteral value.
+func NewBinaryLiteralDatum(b BinaryLiteral) (d Datum) {
+	d.SetBinaryLiteral(b)
+	return d
+}
+
+// NewMysqlBitDatum creates a new MysqlBit Datum for a BinaryLiteral value.
+func NewMysqlBitDatum(b BinaryLiteral) (d Datum) {
+	d.SetMysqlBit(b)
+	return d
+}
+
 // MakeDatums creates datum slice from interfaces.
 func MakeDatums(args ...interface{}) []Datum {
 	datums := make([]Datum, len(args))
@@ -1227,15 +1699,6 @@ func MakeDatums(args ...interface{}) []Datum {
 		datums[i] = NewDatum(v)
 	}
 	return datums
-}
-
-// DatumsToInterfaces converts a datum slice to interface slice.
-func DatumsToInterfaces(datums []Datum) []interface{} {
-	ins := make([]interface{}, len(datums))
-	for i, v := range datums {
-		ins[i] = v.GetValue()
-	}
-	return ins
 }
 
 // MinNotNullDatum returns a datum represents minimum not null value.
@@ -1246,4 +1709,97 @@ func MinNotNullDatum() Datum {
 // MaxValueDatum returns a datum represents max value.
 func MaxValueDatum() Datum {
 	return Datum{k: KindMaxValue}
+}
+
+// EqualDatums compare if a and b contains the same datum values.
+func EqualDatums(sc *variable.StatementContext, a []Datum, b []Datum) (bool, error) {
+	if len(a) != len(b) {
+		return false, nil
+	}
+	if a == nil && b == nil {
+		return true, nil
+	}
+	if a == nil || b == nil {
+		return false, nil
+	}
+	for i, ai := range a {
+		v, err := ai.CompareDatum(sc, &b[i])
+		if err != nil {
+			return false, errors.Trace(err)
+		}
+		if v != 0 {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+// SortDatums sorts a slice of datum.
+func SortDatums(sc *variable.StatementContext, datums []Datum) error {
+	sorter := datumsSorter{datums: datums, sc: sc}
+	sort.Sort(&sorter)
+	return sorter.err
+}
+
+type datumsSorter struct {
+	datums []Datum
+	sc     *variable.StatementContext
+	err    error
+}
+
+func (ds *datumsSorter) Len() int {
+	return len(ds.datums)
+}
+
+func (ds *datumsSorter) Less(i, j int) bool {
+	cmp, err := ds.datums[i].CompareDatum(ds.sc, &ds.datums[j])
+	if err != nil {
+		ds.err = errors.Trace(err)
+		return true
+	}
+	return cmp < 0
+}
+
+func (ds *datumsSorter) Swap(i, j int) {
+	ds.datums[i], ds.datums[j] = ds.datums[j], ds.datums[i]
+}
+
+func handleTruncateError(sc *variable.StatementContext) error {
+	if sc.IgnoreTruncate {
+		return nil
+	}
+	if !sc.TruncateAsWarning {
+		return ErrTruncated
+	}
+	sc.AppendWarning(ErrTruncated)
+	return nil
+}
+
+// DatumsToString converts several datums to formatted string.
+func DatumsToString(datums []Datum) (string, error) {
+	var strs []string
+	for _, datum := range datums {
+		str, err := datum.ToString()
+		if err != nil {
+			return "", errors.Trace(err)
+		}
+		strs = append(strs, str)
+	}
+	size := len(datums)
+	if size > 1 {
+		strs[0] = "(" + strs[0]
+		strs[size-1] = strs[size-1] + ")"
+	}
+	return strings.Join(strs, ", "), nil
+}
+
+// CopyDatum returns a new copy of the datum.
+// TODO: Abandon this function.
+func CopyDatum(datum Datum) Datum {
+	ret := datum
+	if datum.b != nil {
+		ret.b = make([]byte, len(datum.b))
+		copy(ret.b, datum.b)
+	}
+	return ret
 }

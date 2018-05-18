@@ -18,36 +18,86 @@
 package table
 
 import (
-	"github.com/juju/errors"
-	"github.com/pingcap/tidb/column"
-	"github.com/pingcap/tidb/context"
-	"github.com/pingcap/tidb/evaluator"
 	"github.com/pingcap/tidb/kv"
 	"github.com/pingcap/tidb/meta/autoid"
 	"github.com/pingcap/tidb/model"
 	"github.com/pingcap/tidb/mysql"
-	"github.com/pingcap/tidb/util/types"
+	"github.com/pingcap/tidb/sessionctx"
+	"github.com/pingcap/tidb/terror"
+	"github.com/pingcap/tidb/types"
+)
+
+// Type , the type of table, store data in different ways.
+type Type int16
+
+const (
+	// NormalTable , store data in tikv, mocktikv and so on.
+	NormalTable Type = iota
+	// VirtualTable , store no data, just extract data from the memory struct.
+	VirtualTable
+	// MemoryTable , store data only in local memory.
+	MemoryTable
+)
+
+var (
+	errColumnCantNull  = terror.ClassTable.New(codeColumnCantNull, "column can not be null")
+	errUnknownColumn   = terror.ClassTable.New(codeUnknownColumn, "unknown column")
+	errDuplicateColumn = terror.ClassTable.New(codeDuplicateColumn, "duplicate column")
+
+	errGetDefaultFailed = terror.ClassTable.New(codeGetDefaultFailed, "get default value fail")
+
+	// ErrNoDefaultValue is used when insert a row, the column value is not given, and the column has not null flag
+	// and it doesn't have a default value.
+	ErrNoDefaultValue = terror.ClassTable.New(codeNoDefaultValue, "field doesn't have a default value")
+	// ErrIndexOutBound returns for index column offset out of bound.
+	ErrIndexOutBound = terror.ClassTable.New(codeIndexOutBound, "index column offset out of bound")
+	// ErrUnsupportedOp returns for unsupported operation.
+	ErrUnsupportedOp = terror.ClassTable.New(codeUnsupportedOp, "operation not supported")
+	// ErrRowNotFound returns for row not found.
+	ErrRowNotFound = terror.ClassTable.New(codeRowNotFound, "can not find the row")
+	// ErrTableStateCantNone returns for table none state.
+	ErrTableStateCantNone = terror.ClassTable.New(codeTableStateCantNone, "table can not be in none state")
+	// ErrColumnStateCantNone returns for column none state.
+	ErrColumnStateCantNone = terror.ClassTable.New(codeColumnStateCantNone, "column can not be in none state")
+	// ErrColumnStateNonPublic returns for column non-public state.
+	ErrColumnStateNonPublic = terror.ClassTable.New(codeColumnStateNonPublic, "can not use non-public column")
+	// ErrIndexStateCantNone returns for index none state.
+	ErrIndexStateCantNone = terror.ClassTable.New(codeIndexStateCantNone, "index can not be in none state")
+	// ErrInvalidRecordKey returns for invalid record key.
+	ErrInvalidRecordKey = terror.ClassTable.New(codeInvalidRecordKey, "invalid record key")
+	// ErrTruncateWrongValue returns for truncate wrong value for field.
+	ErrTruncateWrongValue = terror.ClassTable.New(codeTruncateWrongValue, "Incorrect value")
 )
 
 // RecordIterFunc is used for low-level record iteration.
-type RecordIterFunc func(h int64, rec []types.Datum, cols []*column.Col) (more bool, err error)
+type RecordIterFunc func(h int64, rec []types.Datum, cols []*Column) (more bool, err error)
 
 // Table is used to retrieve and modify rows in table.
 type Table interface {
 	// IterRecords iterates records in the table and calls fn.
-	IterRecords(ctx context.Context, startKey kv.Key, cols []*column.Col, fn RecordIterFunc) error
+	IterRecords(ctx sessionctx.Context, startKey kv.Key, cols []*Column, fn RecordIterFunc) error
 
 	// RowWithCols returns a row that contains the given cols.
-	RowWithCols(ctx context.Context, h int64, cols []*column.Col) ([]types.Datum, error)
+	RowWithCols(ctx sessionctx.Context, h int64, cols []*Column) ([]types.Datum, error)
 
 	// Row returns a row for all columns.
-	Row(ctx context.Context, h int64) ([]types.Datum, error)
+	Row(ctx sessionctx.Context, h int64) ([]types.Datum, error)
 
 	// Cols returns the columns of the table which is used in select.
-	Cols() []*column.Col
+	Cols() []*Column
+
+	// WritableCols returns columns of the table in writable states.
+	// Writable states includes Public, WriteOnly, WriteOnlyReorganization.
+	WritableCols() []*Column
 
 	// Indices returns the indices of the table.
-	Indices() []*column.IndexedCol
+	Indices() []Index
+
+	// WritableIndices returns write-only and public indices of the table.
+	WritableIndices() []Index
+
+	// DeletableIndices returns delete-only, write-only and public indices of the table.
+	DeletableIndices() []Index
 
 	// RecordPrefix returns the record key prefix.
 	RecordPrefix() kv.Key
@@ -58,68 +108,84 @@ type Table interface {
 	// FirstKey returns the first key.
 	FirstKey() kv.Key
 
-	// RecordKey returns the key in KV storage for the column.
-	RecordKey(h int64, col *column.Col) kv.Key
+	// RecordKey returns the key in KV storage for the row.
+	RecordKey(h int64) kv.Key
 
-	// Truncate truncates the table.
-	Truncate(ctx context.Context) (err error)
+	// AddRecord inserts a row which should contain only public columns
+	// skipHandleCheck indicates that recordID in r has been checked as not duplicate already.
+	AddRecord(ctx sessionctx.Context, r []types.Datum, skipHandleCheck bool) (recordID int64, err error)
 
-	// AddRecord inserts a row into the table.
-	AddRecord(ctx context.Context, r []types.Datum) (recordID int64, err error)
-
-	// UpdateRecord updates a row in the table.
-	UpdateRecord(ctx context.Context, h int64, currData []types.Datum, newData []types.Datum, touched map[int]bool) error
+	// UpdateRecord updates a row which should contain only writable columns.
+	UpdateRecord(ctx sessionctx.Context, h int64, currData, newData []types.Datum, touched []bool) error
 
 	// RemoveRecord removes a row in the table.
-	RemoveRecord(ctx context.Context, h int64, r []types.Datum) error
+	RemoveRecord(ctx sessionctx.Context, h int64, r []types.Datum) error
 
 	// AllocAutoID allocates an auto_increment ID for a new row.
-	AllocAutoID() (int64, error)
+	AllocAutoID(ctx sessionctx.Context) (int64, error)
+
+	// Allocator returns Allocator.
+	Allocator(ctx sessionctx.Context) autoid.Allocator
 
 	// RebaseAutoID rebases the auto_increment ID base.
 	// If allocIDs is true, it will allocate some IDs and save to the cache.
 	// If allocIDs is false, it will not allocate IDs.
-	RebaseAutoID(newBase int64, allocIDs bool) error
+	RebaseAutoID(ctx sessionctx.Context, newBase int64, allocIDs bool) error
 
 	// Meta returns TableInfo.
 	Meta() *model.TableInfo
 
-	// LockRow locks a row.
-	LockRow(ctx context.Context, h int64, forRead bool) error
-
 	// Seek returns the handle greater or equal to h.
-	Seek(ctx context.Context, h int64) (handle int64, found bool, err error)
+	Seek(ctx sessionctx.Context, h int64) (handle int64, found bool, err error)
+
+	// Type returns the type of table
+	Type() Type
 }
 
 // TableFromMeta builds a table.Table from *model.TableInfo.
 // Currently, it is assigned to tables.TableFromMeta in tidb package's init function.
 var TableFromMeta func(alloc autoid.Allocator, tblInfo *model.TableInfo) (Table, error)
 
-// GetColDefaultValue gets default value of the column.
-func GetColDefaultValue(ctx context.Context, col *model.ColumnInfo) (types.Datum, bool, error) {
-	// Check no default value flag.
-	if mysql.HasNoDefaultValueFlag(col.Flag) && col.Tp != mysql.TypeEnum {
-		return types.Datum{}, false, errors.Errorf("Field '%s' doesn't have a default value", col.Name)
+// MockTableFromMeta only serves for test.
+var MockTableFromMeta func(tableInfo *model.TableInfo) Table
+
+// Table error codes.
+const (
+	codeGetDefaultFailed     = 1
+	codeIndexOutBound        = 2
+	codeUnsupportedOp        = 3
+	codeRowNotFound          = 4
+	codeTableStateCantNone   = 5
+	codeColumnStateCantNone  = 6
+	codeColumnStateNonPublic = 7
+	codeIndexStateCantNone   = 8
+	codeInvalidRecordKey     = 9
+
+	codeColumnCantNull     = 1048
+	codeUnknownColumn      = 1054
+	codeDuplicateColumn    = 1110
+	codeNoDefaultValue     = 1364
+	codeTruncateWrongValue = 1366
+)
+
+// Slice is used for table sorting.
+type Slice []Table
+
+func (s Slice) Len() int { return len(s) }
+
+func (s Slice) Less(i, j int) bool {
+	return s[i].Meta().Name.O < s[j].Meta().Name.O
+}
+
+func (s Slice) Swap(i, j int) { s[i], s[j] = s[j], s[i] }
+
+func init() {
+	tableMySQLErrCodes := map[terror.ErrCode]uint16{
+		codeColumnCantNull:     mysql.ErrBadNull,
+		codeUnknownColumn:      mysql.ErrBadField,
+		codeDuplicateColumn:    mysql.ErrFieldSpecifiedTwice,
+		codeNoDefaultValue:     mysql.ErrNoDefaultForField,
+		codeTruncateWrongValue: mysql.ErrTruncatedWrongValueForField,
 	}
-
-	// Check and get timestamp/datetime default value.
-	if col.Tp == mysql.TypeTimestamp || col.Tp == mysql.TypeDatetime {
-		if col.DefaultValue == nil {
-			return types.Datum{}, true, nil
-		}
-
-		value, err := evaluator.GetTimeValue(ctx, col.DefaultValue, col.Tp, col.Decimal)
-		if err != nil {
-			return types.Datum{}, true, errors.Errorf("Field '%s' get default value fail - %s", col.Name, errors.Trace(err))
-		}
-		return types.NewDatum(value), true, nil
-	} else if col.Tp == mysql.TypeEnum {
-		// For enum type, if no default value and not null is set,
-		// the default value is the first element of the enum list
-		if col.DefaultValue == nil && mysql.HasNotNullFlag(col.Flag) {
-			return types.NewDatum(col.FieldType.Elems[0]), true, nil
-		}
-	}
-
-	return types.NewDatum(col.DefaultValue), true, nil
+	terror.ErrClassToMySQLCodes[terror.ClassTable] = tableMySQLErrCodes
 }

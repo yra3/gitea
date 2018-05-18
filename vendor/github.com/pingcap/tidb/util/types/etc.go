@@ -18,7 +18,6 @@
 package types
 
 import (
-	"fmt"
 	"io"
 	"strings"
 
@@ -42,12 +41,60 @@ func IsTypeBlob(tp byte) bool {
 // IsTypeChar returns a boolean indicating
 // whether the tp is the char type like a string type or a varchar type.
 func IsTypeChar(tp byte) bool {
-	switch tp {
-	case mysql.TypeString, mysql.TypeVarchar:
+	return tp == mysql.TypeString || tp == mysql.TypeVarchar
+}
+
+// IsTypeVarchar returns a boolean indicating
+// whether the tp is the varchar type like a varstring type or a varchar type.
+func IsTypeVarchar(tp byte) bool {
+	return tp == mysql.TypeVarString || tp == mysql.TypeVarchar
+}
+
+// IsTypeJSON returns a boolean indicating whether the tp is the JSON type.
+func IsTypeJSON(tp byte) bool {
+	return tp == mysql.TypeJSON
+}
+
+// IsTypePrefixable returns a boolean indicating
+// whether an index on a column with the tp can be defined with a prefix.
+func IsTypePrefixable(tp byte) bool {
+	return IsTypeBlob(tp) || IsTypeChar(tp)
+}
+
+// IsTypeFractionable returns a boolean indicating
+// whether the tp can has time fraction.
+func IsTypeFractionable(tp byte) bool {
+	return tp == mysql.TypeDatetime || tp == mysql.TypeDuration || tp == mysql.TypeTimestamp
+}
+
+// IsTypeTime returns a boolean indicating
+// whether the tp is time type like datetime, date or timestamp.
+func IsTypeTime(tp byte) bool {
+	return tp == mysql.TypeDatetime || tp == mysql.TypeDate || tp == mysql.TypeNewDate || tp == mysql.TypeTimestamp
+}
+
+// IsTemporalWithDate returns a boolean indicating
+// whether the tp is time type with date.
+func IsTemporalWithDate(tp byte) bool {
+	return IsTypeTime(tp)
+}
+
+// IsBinaryStr returns a boolean indicating
+// whether the field type is a binary string type.
+func IsBinaryStr(ft *FieldType) bool {
+	if ft.Collate == charset.CollationBin && (IsTypeChar(ft.Tp) || IsTypeBlob(ft.Tp) || IsTypeVarchar(ft.Tp)) {
 		return true
-	default:
-		return false
 	}
+	return false
+}
+
+// IsNonBinaryStr returns a boolean indicating
+// whether the field type is a non-binary string type.
+func IsNonBinaryStr(ft *FieldType) bool {
+	if ft.Collate != charset.CollationBin && (IsTypeChar(ft.Tp) || IsTypeBlob(ft.Tp) || IsTypeVarchar(ft.Tp)) {
+		return true
+	}
+	return false
 }
 
 var type2Str = map[byte]string{
@@ -55,13 +102,14 @@ var type2Str = map[byte]string{
 	mysql.TypeBlob:       "text",
 	mysql.TypeDate:       "date",
 	mysql.TypeDatetime:   "datetime",
-	mysql.TypeDecimal:    "decimal",
+	mysql.TypeDecimal:    "unspecified",
 	mysql.TypeNewDecimal: "decimal",
 	mysql.TypeDouble:     "double",
 	mysql.TypeEnum:       "enum",
 	mysql.TypeFloat:      "float",
 	mysql.TypeGeometry:   "geometry",
 	mysql.TypeInt24:      "mediumint",
+	mysql.TypeJSON:       "json",
 	mysql.TypeLong:       "int",
 	mysql.TypeLonglong:   "bigint",
 	mysql.TypeLongBlob:   "longtext",
@@ -117,194 +165,17 @@ func InvOp2(x, y interface{}, o opcode.Op) (interface{}, error) {
 	return nil, errors.Errorf("Invalid operation: %v %v %v (mismatched types %T and %T)", x, o, y, x, y)
 }
 
-// UndOp returns an undefined error.
-func UndOp(x interface{}, o opcode.Op) (interface{}, error) {
-	return nil, errors.Errorf("Invalid operation: %v%v (operator %v not defined on %T)", o, x, o, x)
-}
-
-// Overflow returns an overflowed error.
+// overflow returns an overflowed error.
 func overflow(v interface{}, tp byte) error {
-	return errors.Errorf("constant %v overflows %s", v, TypeStr(tp))
+	return ErrOverflow.Gen("constant %v overflows %s", v, TypeStr(tp))
 }
 
-// TODO: collate should return errors from Compare.
-func collate(x, y []interface{}) (r int) {
-	nx, ny := len(x), len(y)
-
-	switch {
-	case nx == 0 && ny != 0:
-		return -1
-	case nx == 0 && ny == 0:
-		return 0
-	case nx != 0 && ny == 0:
-		return 1
-	}
-
-	r = 1
-	if nx > ny {
-		x, y, r = y, x, -r
-	}
-
-	for i, xi := range x {
-		// TODO: we may remove collate later, so here just panic error.
-		c, err := Compare(xi, y[i])
-		if err != nil {
-			panic(fmt.Sprintf("should never happend %v", err))
-		}
-
-		if c != 0 {
-			return c * r
-		}
-	}
-
-	if nx == ny {
-		return 0
-	}
-
-	return -r
-}
-
-// Collators maps a boolean value to a collated function.
-var Collators = map[bool]func(a, b []interface{}) int{false: collateDesc, true: collate}
-
-func collateDesc(a, b []interface{}) int {
-	return -collate(a, b)
-}
-
-// IsOrderedType returns a boolean
-// whether the type of y can be used by order by.
-func IsOrderedType(v interface{}) (r bool) {
-	switch v.(type) {
-	case int, int8, int16, int32, int64,
-		uint, uint8, uint16, uint32, uint64,
-		float32, float64, string, []byte,
-		mysql.Decimal, mysql.Time, mysql.Duration,
-		mysql.Hex, mysql.Bit, mysql.Enum, mysql.Set:
+// IsTypeTemporal checks if a type is a temporal type.
+func IsTypeTemporal(tp byte) bool {
+	switch tp {
+	case mysql.TypeDuration, mysql.TypeDatetime, mysql.TypeTimestamp,
+		mysql.TypeDate, mysql.TypeNewDate:
 		return true
 	}
 	return false
-}
-
-// Clone copies an interface to another interface.
-// It does a deep copy.
-func Clone(from interface{}) (interface{}, error) {
-	if from == nil {
-		return nil, nil
-	}
-	switch x := from.(type) {
-	case uint8, uint16, uint32, uint64, float32, float64,
-		int16, int8, bool, string, int, int64, int32,
-		mysql.Time, mysql.Duration, mysql.Decimal,
-		mysql.Hex, mysql.Bit, mysql.Enum, mysql.Set:
-		return x, nil
-	case []byte:
-		target := make([]byte, len(from.([]byte)))
-		copy(target, from.([]byte))
-		return target, nil
-	case []interface{}:
-		var r []interface{}
-		for _, v := range from.([]interface{}) {
-			vv, err := Clone(v)
-			if err != nil {
-				return nil, err
-			}
-			r = append(r, vv)
-		}
-		return r, nil
-	default:
-		return nil, errors.Errorf("Clone invalid type %T", from)
-	}
-}
-
-func convergeType(a interface{}, hasDecimal, hasFloat *bool) (x interface{}) {
-	x = a
-	switch v := a.(type) {
-	case bool:
-		// treat bool as 1 and 0
-		if v {
-			x = int64(1)
-		} else {
-			x = int64(0)
-		}
-	case int:
-		x = int64(v)
-	case int8:
-		x = int64(v)
-	case int16:
-		x = int64(v)
-	case int32:
-		x = int64(v)
-	case int64:
-		x = int64(v)
-	case uint:
-		x = uint64(v)
-	case uint8:
-		x = uint64(v)
-	case uint16:
-		x = uint64(v)
-	case uint32:
-		x = uint64(v)
-	case uint64:
-		x = uint64(v)
-	case float32:
-		x = float64(v)
-		*hasFloat = true
-	case float64:
-		x = float64(v)
-		*hasFloat = true
-	case mysql.Decimal:
-		x = v
-		*hasDecimal = true
-	}
-	return
-}
-
-// Coerce changes type.
-// If a or b is Decimal, changes the both to Decimal.
-// Else if a or b is Float, changes the both to Float.
-func Coerce(a, b interface{}) (x, y interface{}) {
-	var hasDecimal bool
-	var hasFloat bool
-	x = convergeType(a, &hasDecimal, &hasFloat)
-	y = convergeType(b, &hasDecimal, &hasFloat)
-	if hasDecimal {
-		d, err := mysql.ConvertToDecimal(x)
-		if err == nil {
-			x = d
-		}
-		d, err = mysql.ConvertToDecimal(y)
-		if err == nil {
-			y = d
-		}
-	} else if hasFloat {
-		switch v := x.(type) {
-		case int64:
-			x = float64(v)
-		case uint64:
-			x = float64(v)
-		case mysql.Hex:
-			x = v.ToNumber()
-		case mysql.Bit:
-			x = v.ToNumber()
-		case mysql.Enum:
-			x = v.ToNumber()
-		case mysql.Set:
-			x = v.ToNumber()
-		}
-		switch v := y.(type) {
-		case int64:
-			y = float64(v)
-		case uint64:
-			y = float64(v)
-		case mysql.Hex:
-			y = v.ToNumber()
-		case mysql.Bit:
-			y = v.ToNumber()
-		case mysql.Enum:
-			y = v.ToNumber()
-		case mysql.Set:
-			y = v.ToNumber()
-		}
-	}
-	return
 }

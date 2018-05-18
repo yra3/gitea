@@ -16,9 +16,12 @@
 package ast
 
 import (
-	"github.com/pingcap/tidb/context"
+	"io"
+
 	"github.com/pingcap/tidb/model"
-	"github.com/pingcap/tidb/util/types"
+	"github.com/pingcap/tidb/types"
+	"github.com/pingcap/tidb/util/chunk"
+	"golang.org/x/net/context"
 )
 
 // Node is the basic element of the AST.
@@ -49,12 +52,13 @@ const (
 	FlagHasSubquery
 	FlagHasVariable
 	FlagHasDefault
+	FlagPreEvaluated
 )
 
 // ExprNode is a node that can be evaluated.
 // Name of implementations should have 'Expr' suffix.
 type ExprNode interface {
-	// Node is embeded in ExprNode.
+	// Node is embedded in ExprNode.
 	Node
 	// SetType sets evaluation type to the expression.
 	SetType(tp *types.FieldType)
@@ -74,6 +78,15 @@ type ExprNode interface {
 	SetFlag(flag uint64)
 	// GetFlag returns the flag of the expression.
 	GetFlag() uint64
+
+	// Format formats the AST into a writer.
+	Format(w io.Writer)
+}
+
+// OptBinary is used for parser.
+type OptBinary struct {
+	IsBinary bool
+	Charset  string
 }
 
 // FuncNode represents function call expression node.
@@ -115,41 +128,52 @@ type ResultField struct {
 	TableAsName  model.CIStr
 	DBName       model.CIStr
 
-	// The expression for the result field. If it is generated from a select field, it would
+	// Expr represents the expression for the result field. If it is generated from a select field, it would
 	// be the expression of that select field, otherwise the type would be ValueExpr and value
 	// will be set for every retrieved row.
 	Expr      ExprNode
 	TableName *TableName
-}
-
-// Row represents a single row from Recordset.
-type Row struct {
-	Data []types.Datum
+	// Referenced indicates the result field has been referenced or not.
+	// If not, we don't need to get the values.
+	Referenced bool
 }
 
 // RecordSet is an abstract result set interface to help get data from Plan.
 type RecordSet interface {
-
 	// Fields gets result fields.
-	Fields() (fields []*ResultField, err error)
+	Fields() []*ResultField
 
-	// Next returns the next row, nil row means there is no more to return.
-	Next() (row *Row, err error)
+	// Next reads records into chunk.
+	Next(ctx context.Context, chk *chunk.Chunk) error
+
+	// NewChunk creates a new chunk with initial capacity.
+	NewChunk() *chunk.Chunk
 
 	// Close closes the underlying iterator, call Next after Close will
 	// restart the iteration.
 	Close() error
 }
 
-// ResultSetNode interface has ResultFields property which is computed and set by
-// optimizer.InfoBinder during binding process. Implementations include SelectStmt,
-// SubqueryExpr, TableSource, TableName and Join.
+// RowToDatums converts row to datum slice.
+func RowToDatums(row types.Row, fields []*ResultField) []types.Datum {
+	datums := make([]types.Datum, len(fields))
+	for i, f := range fields {
+		datums[i] = row.GetDatum(i, &f.Column.FieldType)
+	}
+	return datums
+}
+
+// ResultSetNode interface has a ResultFields property, represents a Node that returns result set.
+// Implementations include SelectStmt, SubqueryExpr, TableSource, TableName and Join.
 type ResultSetNode interface {
 	Node
-	// GetResultFields gets result fields of the result set node.
-	GetResultFields() []*ResultField
-	// SetResultFields sets result fields of the result set node.
-	SetResultFields(fields []*ResultField)
+}
+
+// SensitiveStmtNode overloads StmtNode and provides a SecureText method.
+type SensitiveStmtNode interface {
+	StmtNode
+	// SecureText is different from Text that it hide password information.
+	SecureText() string
 }
 
 // Statement is an interface for SQL execution.
@@ -158,20 +182,20 @@ type ResultSetNode interface {
 // If the Exec method requires any Execution domain local data,
 // they must be held out of the implementing instance.
 type Statement interface {
-	// Explain gets the execution plans.
-	//Explain(ctx context.Context, w format.Formatter)
-
-	// IsDDL shows whether the statement is an DDL operation.
-	IsDDL() bool
-
 	// OriginText gets the origin SQL text.
 	OriginText() string
 
-	// SetText sets the executive SQL text.
-	SetText(text string)
-
 	// Exec executes SQL and gets a Recordset.
 	Exec(ctx context.Context) (RecordSet, error)
+
+	// IsPrepared returns whether this statement is prepared statement.
+	IsPrepared() bool
+
+	// IsReadOnly returns if the statement is read only. For example: SelectStmt without lock.
+	IsReadOnly() bool
+
+	// RebuildPlan rebuilds the plan of the statement.
+	RebuildPlan() (schemaVersion int64, err error)
 }
 
 // Visitor visits a Node.

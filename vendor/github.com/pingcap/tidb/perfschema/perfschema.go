@@ -14,61 +14,32 @@
 package perfschema
 
 import (
-	"github.com/pingcap/tidb/kv"
 	"github.com/pingcap/tidb/model"
 	"github.com/pingcap/tidb/table"
 )
 
-// StatementInstrument defines the methods for statement instrumentation points
-type StatementInstrument interface {
-	RegisterStatement(category, name string, elem interface{})
-
-	StartStatement(sql string, connID uint64, callerName EnumCallerName, elem interface{}) *StatementState
-
-	EndStatement(state *StatementState)
-}
-
-// PerfSchema defines the methods to be invoked by the executor
-type PerfSchema interface {
-
-	// For statement instrumentation only.
-	StatementInstrument
-
-	// GetDBMeta returns db info for PerformanceSchema.
-	GetDBMeta() *model.DBInfo
-	// GetTable returns table instance for name.
-	GetTable(name string) (table.Table, bool)
-}
-
-type perfSchema struct {
-	store   kv.Storage
+// PerfSchema exports for test.
+type PerfSchema struct {
 	dbInfo  *model.DBInfo
 	tables  map[string]*model.TableInfo
-	mTables map[string]table.Table // MemoryTables for perfSchema
-
-	// Used for TableStmtsHistory
-	historyHandles []int64
-	historyCursor  int
+	mTables map[string]table.Table // Memory tables for perfSchema
 }
 
-var _ PerfSchema = (*perfSchema)(nil)
-
-// PerfHandle is the only access point for the in-memory performance schema information
-var (
-	PerfHandle PerfSchema
-)
+var handle = NewPerfHandle()
 
 // NewPerfHandle creates a new perfSchema on store.
-func NewPerfHandle(store kv.Storage) PerfSchema {
-	schema := PerfHandle.(*perfSchema)
-	schema.store = store
-	schema.historyHandles = make([]int64, 0, stmtsHistoryElemMax)
-	_ = schema.initialize()
-	registerStatements()
-	return PerfHandle
+func NewPerfHandle() *PerfSchema {
+	schema := &PerfSchema{}
+	schema.initialize()
+	return schema
 }
 
-func init() {
-	schema := &perfSchema{}
-	PerfHandle = schema
+// GetDBMeta returns db info for PerformanceSchema.
+func GetDBMeta() *model.DBInfo {
+	return handle.GetDBMeta()
+}
+
+// GetTable returns table instance for name.
+func GetTable(name string) (table.Table, bool) {
+	return handle.GetTable(name)
 }

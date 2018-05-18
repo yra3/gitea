@@ -13,19 +13,6 @@
 
 package ast
 
-const preEvaluable = FlagHasParamMarker | FlagHasFunc | FlagHasVariable | FlagHasDefault
-
-// IsPreEvaluable checks if the expression can be evaluated before execution.
-func IsPreEvaluable(expr ExprNode) bool {
-	return expr.GetFlag()|preEvaluable == preEvaluable
-}
-
-// IsConstant checks if the expression is constant.
-// A constant expression is safe to be rewritten to value expression.
-func IsConstant(expr ExprNode) bool {
-	return expr.GetFlag() == FlagConstant
-}
-
 // HasAggFlag checks if the expr contains FlagHasAggregateFunc.
 func HasAggFlag(expr ExprNode) bool {
 	return expr.GetFlag()&FlagHasAggregateFunc > 0
@@ -92,7 +79,11 @@ func (f *flagSetter) Leave(in Node) (Node, bool) {
 	case *ValuesExpr:
 		x.SetFlag(FlagHasReference)
 	case *VariableExpr:
-		x.SetFlag(FlagHasVariable)
+		if x.Value == nil {
+			x.SetFlag(FlagHasVariable)
+		} else {
+			x.SetFlag(FlagHasVariable | x.Value.GetFlag())
+		}
 	}
 
 	return in, true

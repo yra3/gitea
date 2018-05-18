@@ -16,9 +16,10 @@ package localstore
 import (
 	"fmt"
 
+	log "github.com/Sirupsen/logrus"
 	"github.com/juju/errors"
-	"github.com/ngaut/log"
 	"github.com/pingcap/tidb/kv"
+	"github.com/pingcap/tidb/terror"
 )
 
 var (
@@ -50,14 +51,11 @@ func newTxn(s *dbStore, ver kv.Version) *dbTxn {
 }
 
 // Implement transaction interface
-
 func (txn *dbTxn) Get(k kv.Key) ([]byte, error) {
-	log.Debugf("[kv] get key:%q, txn:%d", k, txn.tid)
 	return txn.us.Get(k)
 }
 
 func (txn *dbTxn) Set(k kv.Key, data []byte) error {
-	log.Debugf("[kv] set key:%q, txn:%d", k, txn.tid)
 	txn.dirty = true
 	return txn.us.Set(k, data)
 }
@@ -67,12 +65,14 @@ func (txn *dbTxn) String() string {
 }
 
 func (txn *dbTxn) Seek(k kv.Key) (kv.Iterator, error) {
-	log.Debugf("[kv] seek key:%q, txn:%d", k, txn.tid)
 	return txn.us.Seek(k)
 }
 
+func (txn *dbTxn) SeekReverse(k kv.Key) (kv.Iterator, error) {
+	return txn.us.SeekReverse(k)
+}
+
 func (txn *dbTxn) Delete(k kv.Key) error {
-	log.Debugf("[kv] delete key:%q, txn:%d", k, txn.tid)
 	txn.dirty = true
 	return txn.us.Delete(k)
 }
@@ -86,6 +86,19 @@ func (txn *dbTxn) DelOption(opt kv.Option) {
 }
 
 func (txn *dbTxn) doCommit() error {
+	// Check schema lease.
+	checker, ok := txn.us.GetOption(kv.SchemaLeaseChecker).(schemaLeaseChecker)
+	if ok {
+		// DDL job doesn't set this option.
+		currVer, err := txn.store.CurrentVersion()
+		if err != nil {
+			return errors.Trace(err)
+		}
+		if err := checker.Check(currVer.Ver); err != nil {
+			return errors.Trace(err)
+		}
+	}
+
 	// check lazy condition pairs
 	if err := txn.us.CheckLazyConditionPairs(); err != nil {
 		return errors.Trace(err)
@@ -107,15 +120,20 @@ func (txn *dbTxn) Commit() error {
 		return errors.Trace(kv.ErrInvalidTxn)
 	}
 	log.Debugf("[kv] commit txn %d", txn.tid)
-	defer func() {
-		txn.close()
-	}()
+	defer terror.Call(txn.close)
 
 	return errors.Trace(txn.doCommit())
 }
 
+func (txn *dbTxn) GetSnapshot() kv.Snapshot {
+	return newSnapshot(txn.store, kv.Version{Ver: txn.tid})
+}
+
+type schemaLeaseChecker interface {
+	Check(txnTS uint64) error
+}
+
 func (txn *dbTxn) close() error {
-	txn.us.Release()
 	txn.lockedKeys = nil
 	txn.valid = false
 	return nil
@@ -125,7 +143,7 @@ func (txn *dbTxn) Rollback() error {
 	if !txn.valid {
 		return errors.Trace(kv.ErrInvalidTxn)
 	}
-	log.Warnf("[kv] Rollback txn %d", txn.tid)
+	log.Infof("[kv] Rollback txn %d", txn.tid)
 	return txn.close()
 }
 
@@ -140,21 +158,18 @@ func (txn *dbTxn) IsReadOnly() bool {
 	return !txn.dirty
 }
 
-func (txn *dbTxn) StartTS() int64 {
-	return int64(txn.tid)
+func (txn *dbTxn) StartTS() uint64 {
+	return txn.tid
 }
 
-func (txn *dbTxn) GetClient() kv.Client {
-	return nil
+func (txn *dbTxn) Valid() bool {
+	return txn.valid
 }
 
-type dbClient struct {
+func (txn *dbTxn) Size() int {
+	return txn.us.Size()
 }
 
-func (c *dbClient) SupportRequestType(reqType, subType int64) bool {
-	return false
-}
-
-func (c *dbClient) Send(req *kv.Request) kv.Response {
-	return nil
+func (txn *dbTxn) Len() int {
+	return txn.us.Len()
 }

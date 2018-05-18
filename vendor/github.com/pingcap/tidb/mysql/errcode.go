@@ -23,11 +23,11 @@ const (
 	ErrYes                                                          = 1003
 	ErrCantCreateFile                                               = 1004
 	ErrCantCreateTable                                              = 1005
-	ErrCantCreateDb                                                 = 1006
-	ErrDbCreateExists                                               = 1007
-	ErrDbDropExists                                                 = 1008
-	ErrDbDropDelete                                                 = 1009
-	ErrDbDropRmdir                                                  = 1010
+	ErrCantCreateDB                                                 = 1006
+	ErrDBCreateExists                                               = 1007
+	ErrDBDropExists                                                 = 1008
+	ErrDBDropDelete                                                 = 1009
+	ErrDBDropRmdir                                                  = 1010
 	ErrCantDeleteFile                                               = 1011
 	ErrCantFindSystemRec                                            = 1012
 	ErrCantGetStat                                                  = 1013
@@ -51,34 +51,34 @@ const (
 	ErrIllegalHa                                                    = 1031
 	ErrKeyNotFound                                                  = 1032
 	ErrNotFormFile                                                  = 1033
-	ErrNotKeyfile                                                   = 1034
-	ErrOldKeyfile                                                   = 1035
+	ErrNotKeyFile                                                   = 1034
+	ErrOldKeyFile                                                   = 1035
 	ErrOpenAsReadonly                                               = 1036
-	ErrOutofmemory                                                  = 1037
-	ErrOutOfSortmemory                                              = 1038
+	ErrOutofMemory                                                  = 1037
+	ErrOutOfSortMemory                                              = 1038
 	ErrUnexpectedEOF                                                = 1039
 	ErrConCount                                                     = 1040
 	ErrOutOfResources                                               = 1041
 	ErrBadHost                                                      = 1042
 	ErrHandshake                                                    = 1043
-	ErrDbaccessDenied                                               = 1044
+	ErrDBaccessDenied                                               = 1044
 	ErrAccessDenied                                                 = 1045
-	ErrNoDb                                                         = 1046
+	ErrNoDB                                                         = 1046
 	ErrUnknownCom                                                   = 1047
 	ErrBadNull                                                      = 1048
-	ErrBadDb                                                        = 1049
+	ErrBadDB                                                        = 1049
 	ErrTableExists                                                  = 1050
 	ErrBadTable                                                     = 1051
 	ErrNonUniq                                                      = 1052
 	ErrServerShutdown                                               = 1053
 	ErrBadField                                                     = 1054
-	ErrWrongFieldWithGroup                                          = 1055
+	ErrFieldNotInGroupBy                                            = 1055
 	ErrWrongGroupField                                              = 1056
 	ErrWrongSumSelect                                               = 1057
 	ErrWrongValueCount                                              = 1058
 	ErrTooLongIdent                                                 = 1059
-	ErrDupFieldname                                                 = 1060
-	ErrDupKeyname                                                   = 1061
+	ErrDupFieldName                                                 = 1060
+	ErrDupKeyName                                                   = 1061
 	ErrDupEntry                                                     = 1062
 	ErrWrongFieldSpec                                               = 1063
 	ErrParse                                                        = 1064
@@ -102,7 +102,7 @@ const (
 	ErrNoSuchIndex                                                  = 1082
 	ErrWrongFieldTerminators                                        = 1083
 	ErrBlobsAndNoTerminated                                         = 1084
-	ErrTextfileNotReadable                                          = 1085
+	ErrTextFileNotReadable                                          = 1085
 	ErrFileExists                                                   = 1086
 	ErrLoadInfo                                                     = 1087
 	ErrAlterInfo                                                    = 1088
@@ -115,11 +115,11 @@ const (
 	ErrKillDenied                                                   = 1095
 	ErrNoTablesUsed                                                 = 1096
 	ErrTooBigSet                                                    = 1097
-	ErrNoUniqueLogfile                                              = 1098
+	ErrNoUniqueLogFile                                              = 1098
 	ErrTableNotLockedForWrite                                       = 1099
 	ErrTableNotLocked                                               = 1100
 	ErrBlobCantHaveDefault                                          = 1101
-	ErrWrongDbName                                                  = 1102
+	ErrWrongDBName                                                  = 1102
 	ErrWrongTableName                                               = 1103
 	ErrTooBigSelect                                                 = 1104
 	ErrUnknown                                                      = 1105
@@ -193,7 +193,7 @@ const (
 	ErrRequiresPrimaryKey                                           = 1173
 	ErrNoRaidCompiled                                               = 1174
 	ErrUpdateWithoutKeyInSafeMode                                   = 1175
-	ErrKeyDoesNotExits                                              = 1176
+	ErrKeyDoesNotExist                                              = 1176
 	ErrCheckNoSuchTable                                             = 1177
 	ErrCheckNotImplemented                                          = 1178
 	ErrCantDoThisDuringAnTransaction                                = 1179
@@ -225,8 +225,8 @@ const (
 	ErrLockWaitTimeout                                              = 1205
 	ErrLockTableFull                                                = 1206
 	ErrReadOnlyTransaction                                          = 1207
-	ErrDropDbWithReadLock                                           = 1208
-	ErrCreateDbWithReadLock                                         = 1209
+	ErrDropDBWithReadLock                                           = 1208
+	ErrCreateDBWithReadLock                                         = 1209
 	ErrWrongArguments                                               = 1210
 	ErrNoPermissionToCreateUser                                     = 1211
 	ErrUnionTablesInDifferentDir                                    = 1212
@@ -261,7 +261,7 @@ const (
 	ErrOperandColumns                                               = 1241
 	ErrSubqueryNo1Row                                               = 1242
 	ErrUnknownStmtHandler                                           = 1243
-	ErrCorruptHelpDb                                                = 1244
+	ErrCorruptHelpDB                                                = 1244
 	ErrCyclicReference                                              = 1245
 	ErrAutoConvert                                                  = 1246
 	ErrIllegalReference                                             = 1247
@@ -594,7 +594,7 @@ const (
 	ErrRbrNotAvailable                                              = 1574
 	ErrBase64Decode                                                 = 1575
 	ErrEventRecursionForbidden                                      = 1576
-	ErrEventsDb                                                     = 1577
+	ErrEventsDB                                                     = 1577
 	ErrOnlyIntegersAllowed                                          = 1578
 	ErrUnsuportedLogEngine                                          = 1579
 	ErrBadLogStatement                                              = 1580
@@ -604,7 +604,7 @@ const (
 	ErrWrongParametersToStoredFct                                   = 1584
 	ErrNativeFctNameCollision                                       = 1585
 	ErrDupEntryWithKeyName                                          = 1586
-	ErrBinlogPurgeEmfile                                            = 1587
+	ErrBinlogPurgeEmFile                                            = 1587
 	ErrEventCannotCreateInThePast                                   = 1588
 	ErrEventCannotAlterInThePast                                    = 1589
 	ErrSlaveIncident                                                = 1590
@@ -771,7 +771,7 @@ const (
 	ErrWarningNotCompleteRollbackWithCreatedTempTable               = 1751
 	ErrWarningNotCompleteRollbackWithDroppedTempTable               = 1752
 	ErrMtsFeatureIsNotSupported                                     = 1753
-	ErrMtsUpdatedDbsGreaterMax                                      = 1754
+	ErrMtsUpdatedDBsGreaterMax                                      = 1754
 	ErrMtsCantParallel                                              = 1755
 	ErrMtsInconsistentData                                          = 1756
 	ErrFulltextNotSupportedWithPartitioning                         = 1757
@@ -882,4 +882,26 @@ const (
 	ErrMustChangePasswordLogin                                      = 1862
 	ErrRowInWrongPartition                                          = 1863
 	ErrErrorLast                                                    = 1863
+	ErrBadGeneratedColumn                                           = 3105
+	ErrUnsupportedOnGeneratedColumn                                 = 3106
+	ErrGeneratedColumnNonPrior                                      = 3107
+	ErrDependentByGeneratedColumn                                   = 3108
+	ErrInvalidJSONText                                              = 3140
+	ErrInvalidJSONPath                                              = 3143
+	ErrInvalidJSONData                                              = 3146
+	ErrJSONUsedAsKey                                                = 3152
+
+	// TiDB self-defined errors.
+	ErrMemExceedThreshold = 8001
+	ErrForUpdateCantRetry = 8002
+
+	// TiKV/PD errors.
+	ErrPDServerTimeout    = 9001
+	ErrTiKVServerTimeout  = 9002
+	ErrTiKVServerBusy     = 9003
+	ErrResolveLockTimeout = 9004
+	ErrRegionUnavailable  = 9005
+	ErrGCTooEarly         = 9006
+
+	ErrTxnTooLarge = 9500
 )

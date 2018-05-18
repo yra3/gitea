@@ -18,21 +18,22 @@ import (
 
 	"github.com/juju/errors"
 	"github.com/pingcap/tidb/kv"
-	"github.com/pingcap/tidb/terror"
 )
 
 // Set sets the string value of the key.
 func (t *TxStructure) Set(key []byte, value []byte) error {
+	if t.readWriter == nil {
+		return errWriteOnSnapshot
+	}
 	ek := t.encodeStringDataKey(key)
-
-	return t.txn.Set(ek, value)
+	return t.readWriter.Set(ek, value)
 }
 
 // Get gets the string value of a key.
 func (t *TxStructure) Get(key []byte) ([]byte, error) {
 	ek := t.encodeStringDataKey(key)
-	value, err := t.txn.Get(ek)
-	if terror.ErrorEqual(err, kv.ErrNotExist) {
+	value, err := t.reader.Get(ek)
+	if kv.ErrNotExist.Equal(err) {
 		err = nil
 	}
 	return value, errors.Trace(err)
@@ -52,10 +53,13 @@ func (t *TxStructure) GetInt64(key []byte) (int64, error) {
 // Inc increments the integer value of a key by step, returns
 // the value after the increment.
 func (t *TxStructure) Inc(key []byte, step int64) (int64, error) {
+	if t.readWriter == nil {
+		return 0, errWriteOnSnapshot
+	}
 	ek := t.encodeStringDataKey(key)
 	// txn Inc will lock this key, so we don't lock it here.
-	n, err := kv.IncInt64(t.txn, ek, step)
-	if terror.ErrorEqual(err, kv.ErrNotExist) {
+	n, err := kv.IncInt64(t.readWriter, ek, step)
+	if kv.ErrNotExist.Equal(err) {
 		err = nil
 	}
 	return n, errors.Trace(err)
@@ -63,9 +67,12 @@ func (t *TxStructure) Inc(key []byte, step int64) (int64, error) {
 
 // Clear removes the string value of the key.
 func (t *TxStructure) Clear(key []byte) error {
+	if t.readWriter == nil {
+		return errWriteOnSnapshot
+	}
 	ek := t.encodeStringDataKey(key)
-	err := t.txn.Delete(ek)
-	if terror.ErrorEqual(err, kv.ErrNotExist) {
+	err := t.readWriter.Delete(ek)
+	if kv.ErrNotExist.Equal(err) {
 		err = nil
 	}
 	return errors.Trace(err)

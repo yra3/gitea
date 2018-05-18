@@ -20,10 +20,12 @@ import (
 	"sync"
 	"time"
 
+	log "github.com/Sirupsen/logrus"
 	"github.com/juju/errors"
-	"github.com/ngaut/log"
 	"github.com/pingcap/tidb/kv"
 	"github.com/pingcap/tidb/store/localstore/engine"
+	"github.com/pingcap/tidb/store/tikv/oracle"
+	"github.com/pingcap/tidb/store/tikv/oracle/oracles"
 	"github.com/pingcap/tidb/util/segmentmap"
 	"github.com/twinj/uuid"
 )
@@ -32,60 +34,56 @@ var (
 	_ kv.Storage = (*dbStore)(nil)
 )
 
-type op int
-
 const (
-	opSeek = iota + 1
-	opCommit
-)
-
-const (
-	maxSeekWorkers = 3
-
 	lowerWaterMark = 10 // second
 )
 
-type command struct {
-	op    op
-	txn   *dbTxn
-	args  interface{}
-	reply interface{}
-	done  chan error
-}
-
-type seekReply struct {
-	key   []byte
-	value []byte
-}
-
-type commitReply struct {
-	err error
-}
-
-type seekArgs struct {
-	key []byte
-}
-
-type commitArgs struct {
+func (s *dbStore) prepareSeek(startTS uint64) error {
+	for {
+		var conflict bool
+		s.mu.RLock()
+		if s.closed {
+			s.mu.RUnlock()
+			return ErrDBClosed
+		}
+		if s.committingTS != 0 && s.committingTS < startTS {
+			// We not sure if we can read the committing value,
+			conflict = true
+		} else {
+			s.wg.Add(1)
+		}
+		s.mu.RUnlock()
+		if conflict {
+			// Wait for committing to be finished and try again.
+			time.Sleep(time.Microsecond)
+			continue
+		}
+		return nil
+	}
 }
 
 // Seek searches for the first key in the engine which is >= key in byte order, returns (nil, nil, ErrNotFound)
 // if such key is not found.
-func (s *dbStore) Seek(key []byte) ([]byte, []byte, error) {
-	c := &command{
-		op:   opSeek,
-		args: &seekArgs{key: key},
-		done: make(chan error, 1),
-	}
-
-	s.commandCh <- c
-	err := <-c.done
+func (s *dbStore) Seek(key []byte, startTS uint64) ([]byte, []byte, error) {
+	err := s.prepareSeek(startTS)
 	if err != nil {
 		return nil, nil, errors.Trace(err)
 	}
+	key, val, err := s.db.Seek(key)
+	s.wg.Done()
+	return key, val, err
+}
 
-	reply := c.reply.(*seekReply)
-	return reply.key, reply.value, nil
+// SeekReverse searches for the first key in the engine which is less than key in byte order.
+// Returns (nil, nil, ErrNotFound) if such key is not found.
+func (s *dbStore) SeekReverse(key []byte, startTS uint64) ([]byte, []byte, error) {
+	err := s.prepareSeek(startTS)
+	if err != nil {
+		return nil, nil, errors.Trace(err)
+	}
+	key, val, err := s.db.SeekReverse(key)
+	s.wg.Done()
+	return key, val, err
 }
 
 // Commit writes the changed data in Batch.
@@ -93,85 +91,7 @@ func (s *dbStore) CommitTxn(txn *dbTxn) error {
 	if len(txn.lockedKeys) == 0 {
 		return nil
 	}
-	c := &command{
-		op:   opCommit,
-		txn:  txn,
-		args: &commitArgs{},
-		done: make(chan error, 1),
-	}
-
-	s.commandCh <- c
-	err := <-c.done
-	return errors.Trace(err)
-}
-
-func (s *dbStore) seekWorker(wg *sync.WaitGroup, seekCh chan *command) {
-	defer wg.Done()
-	for {
-		var pending []*command
-		select {
-		case cmd, ok := <-seekCh:
-			if !ok {
-				return
-			}
-			pending = append(pending, cmd)
-		L:
-			for {
-				select {
-				case cmd, ok := <-seekCh:
-					if !ok {
-						break L
-					}
-					pending = append(pending, cmd)
-				default:
-					break L
-				}
-			}
-		}
-
-		s.doSeek(pending)
-	}
-}
-
-func (s *dbStore) scheduler() {
-	closed := false
-	seekCh := make(chan *command, 1000)
-	wgSeekWorkers := &sync.WaitGroup{}
-	wgSeekWorkers.Add(maxSeekWorkers)
-	for i := 0; i < maxSeekWorkers; i++ {
-		go s.seekWorker(wgSeekWorkers, seekCh)
-	}
-
-	segmentIndex := int64(0)
-
-	tick := time.NewTicker(time.Second)
-	defer tick.Stop()
-
-	for {
-		select {
-		case cmd := <-s.commandCh:
-			if closed {
-				cmd.done <- ErrDBClosed
-				continue
-			}
-			switch cmd.op {
-			case opSeek:
-				seekCh <- cmd
-			case opCommit:
-				s.doCommit(cmd)
-			}
-		case <-s.closeCh:
-			closed = true
-			// notify seek worker to exit
-			close(seekCh)
-			wgSeekWorkers.Wait()
-			s.wg.Done()
-		case <-tick.C:
-			segmentIndex = segmentIndex % s.recentUpdates.SegmentCount()
-			s.cleanRecentUpdates(segmentIndex)
-			segmentIndex++
-		}
-	}
+	return s.doCommit(txn)
 }
 
 func (s *dbStore) cleanRecentUpdates(segmentIndex int64) {
@@ -215,22 +135,48 @@ func (s *dbStore) tryLock(txn *dbTxn) (err error) {
 	return nil
 }
 
-func (s *dbStore) doCommit(cmd *command) {
-	txn := cmd.txn
-	curVer, err := globalVersionProvider.CurrentVersion()
-	if err != nil {
-		log.Fatal(err)
+func (s *dbStore) doCommit(txn *dbTxn) error {
+	var commitVer kv.Version
+	var err error
+	for {
+		// Atomically get commit version
+		s.mu.Lock()
+		closed := s.closed
+		committing := s.committingTS != 0
+		if !closed && !committing {
+			commitVer, err = globalVersionProvider.CurrentVersion()
+			if err != nil {
+				s.mu.Unlock()
+				return errors.Trace(err)
+			}
+			s.committingTS = commitVer.Ver
+			s.wg.Add(1)
+		}
+		s.mu.Unlock()
+
+		if closed {
+			return ErrDBClosed
+		}
+		if committing {
+			time.Sleep(time.Microsecond)
+			continue
+		}
+		break
 	}
+	defer func() {
+		s.mu.Lock()
+		s.committingTS = 0
+		s.wg.Done()
+		s.mu.Unlock()
+	}()
+	// Here we are sure no concurrent committing happens.
 	err = s.tryLock(txn)
 	if err != nil {
-		cmd.done <- errors.Trace(err)
-		return
+		return errors.Trace(err)
 	}
-	// Update commit version.
-	txn.version = curVer
 	b := s.db.NewBatch()
-	txn.us.WalkBuffer(func(k kv.Key, value []byte) error {
-		mvccKey := MvccEncodeVersionKey(kv.Key(k), curVer)
+	err = txn.us.WalkBuffer(func(k kv.Key, value []byte) error {
+		mvccKey := MvccEncodeVersionKey(k, commitVer)
 		if len(value) == 0 { // Deleted marker
 			b.Put(mvccKey, nil)
 			s.compactor.OnDelete(k)
@@ -240,26 +186,31 @@ func (s *dbStore) doCommit(cmd *command) {
 		}
 		return nil
 	})
+	if err != nil {
+		return errors.Trace(err)
+	}
 	err = s.writeBatch(b)
-	s.unLockKeys(txn)
-	cmd.done <- errors.Trace(err)
-}
-
-func (s *dbStore) doSeek(seekCmds []*command) {
-	keys := make([][]byte, 0, len(seekCmds))
-	for _, cmd := range seekCmds {
-		keys = append(keys, cmd.args.(*seekArgs).key)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	// Update commit version.
+	txn.version = commitVer
+	err = s.unLockKeys(txn)
+	if err != nil {
+		return errors.Trace(err)
 	}
 
-	results := s.db.MultiSeek(keys)
-
-	for i, cmd := range seekCmds {
-		reply := &seekReply{}
-		var err error
-		reply.key, reply.value, err = results[i].Key, results[i].Value, results[i].Err
-		cmd.reply = reply
-		cmd.done <- errors.Trace(err)
+	// Clean recent updates.
+	now := time.Now()
+	if now.Sub(s.lastCleanTime) > time.Second {
+		s.cleanRecentUpdates(s.cleanIdx)
+		s.cleanIdx++
+		if s.cleanIdx == s.recentUpdates.SegmentCount() {
+			s.cleanIdx = 0
+		}
+		s.lastCleanTime = now
 	}
+	return nil
 }
 
 func (s *dbStore) NewBatch() engine.Batch {
@@ -271,18 +222,22 @@ type dbStore struct {
 
 	txns       map[uint64]*dbTxn
 	keysLocked map[string]uint64
-	// TODO: clean up recentUpdates
+
 	recentUpdates *segmentmap.SegmentMap
-	uuid          string
-	path          string
-	compactor     *localstoreCompactor
-	wg            *sync.WaitGroup
+	cleanIdx      int64
+	lastCleanTime time.Time
 
-	commandCh chan *command
-	closeCh   chan struct{}
+	uuid      string
+	path      string
+	compactor *localstoreCompactor
+	wg        sync.WaitGroup
 
-	mu     sync.Mutex
-	closed bool
+	mu           sync.RWMutex
+	closed       bool
+	committingTS uint64
+
+	pd     localPD
+	oracle oracle.Oracle
 }
 
 type storeCache struct {
@@ -309,8 +264,14 @@ type Driver struct {
 	engine.Driver
 }
 
+// MockRemoteStore mocks remote store. It makes IsLocalStore return false.
+var MockRemoteStore bool
+
 // IsLocalStore checks whether a storage is local or not.
 func IsLocalStore(s kv.Storage) bool {
+	if MockRemoteStore {
+		return false
+	}
 	_, ok := s.(*dbStore)
 	return ok
 }
@@ -346,20 +307,22 @@ func (d Driver) Open(path string) (kv.Storage, error) {
 		path:       engineSchema,
 		db:         db,
 		compactor:  newLocalCompactor(localCompactDefaultPolicy, db),
-		commandCh:  make(chan *command, 1000),
 		closed:     false,
-		closeCh:    make(chan struct{}),
-		wg:         &sync.WaitGroup{},
+		oracle:     oracles.NewLocalOracle(),
 	}
 	s.recentUpdates, err = segmentmap.NewSegmentMap(100)
 	if err != nil {
 		return nil, errors.Trace(err)
-
 	}
+	regionServers := buildLocalRegionServers(s)
+	var infos []*regionInfo
+	for _, rs := range regionServers {
+		ri := &regionInfo{startKey: rs.startKey, endKey: rs.endKey, rs: rs}
+		infos = append(infos, ri)
+	}
+	s.pd.SetRegionInfo(infos)
 	mc.cache[engineSchema] = s
 	s.compactor.Start()
-	s.wg.Add(1)
-	go s.scheduler()
 	return s, nil
 }
 
@@ -368,12 +331,12 @@ func (s *dbStore) UUID() string {
 }
 
 func (s *dbStore) GetSnapshot(ver kv.Version) (kv.Snapshot, error) {
-	s.mu.Lock()
+	s.mu.RLock()
 	if s.closed {
-		s.mu.Unlock()
+		s.mu.RUnlock()
 		return nil, ErrDBClosed
 	}
-	s.mu.Unlock()
+	s.mu.RUnlock()
 
 	currentVer, err := globalVersionProvider.CurrentVersion()
 	if err != nil {
@@ -390,18 +353,26 @@ func (s *dbStore) GetSnapshot(ver kv.Version) (kv.Snapshot, error) {
 	}, nil
 }
 
+func (s *dbStore) GetClient() kv.Client {
+	return &dbClient{store: s, regionInfo: s.pd.GetRegionInfo()}
+}
+
+func (s *dbStore) GetOracle() oracle.Oracle {
+	return s.oracle
+}
+
 func (s *dbStore) CurrentVersion() (kv.Version, error) {
 	return globalVersionProvider.CurrentVersion()
 }
 
 // Begin transaction
 func (s *dbStore) Begin() (kv.Transaction, error) {
-	s.mu.Lock()
+	s.mu.RLock()
 	if s.closed {
-		s.mu.Unlock()
+		s.mu.RUnlock()
 		return nil, ErrDBClosed
 	}
-	s.mu.Unlock()
+	s.mu.RUnlock()
 
 	beginVer, err := globalVersionProvider.CurrentVersion()
 	if err != nil {
@@ -411,20 +382,20 @@ func (s *dbStore) Begin() (kv.Transaction, error) {
 	return newTxn(s, beginVer), nil
 }
 
+// BeginWithStartTS begins transaction with startTS.
+func (s *dbStore) BeginWithStartTS(startTS uint64) (kv.Transaction, error) {
+	return s.Begin()
+}
+
 func (s *dbStore) Close() error {
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
 		return ErrDBClosed
 	}
-
 	s.closed = true
 	s.mu.Unlock()
-
-	mc.mu.Lock()
-	defer mc.mu.Unlock()
 	s.compactor.Stop()
-	s.closeCh <- struct{}{}
 	s.wg.Wait()
 	delete(mc.cache, s.path)
 	return s.db.Close()
@@ -434,11 +405,6 @@ func (s *dbStore) writeBatch(b engine.Batch) error {
 	if b.Len() == 0 {
 		return nil
 	}
-
-	if s.closed {
-		return errors.Trace(ErrDBClosed)
-	}
-
 	err := s.db.Commit(b)
 	if err != nil {
 		log.Error(err)
@@ -448,19 +414,23 @@ func (s *dbStore) writeBatch(b engine.Batch) error {
 	return nil
 }
 
+func (s *dbStore) SupportDeleteRange() (supported bool) {
+	return false
+}
+
 func (s *dbStore) newBatch() engine.Batch {
 	return s.db.NewBatch()
 }
+
 func (s *dbStore) unLockKeys(txn *dbTxn) error {
 	for k := range txn.lockedKeys {
 		if tid, ok := s.keysLocked[k]; !ok || tid != txn.tid {
 			debug.PrintStack()
-			log.Fatalf("should never happend:%v, %v", tid, txn.tid)
+			return errors.Errorf("should never happened:%v, %v", tid, txn.tid)
 		}
 
 		delete(s.keysLocked, k)
 		s.recentUpdates.Set([]byte(k), txn.version, true)
 	}
-
 	return nil
 }

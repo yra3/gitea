@@ -14,51 +14,68 @@
 package kv
 
 import (
-	"errors"
 	"strings"
 
-	"github.com/pingcap/go-themis"
 	"github.com/pingcap/tidb/mysql"
 	"github.com/pingcap/tidb/terror"
 )
 
 // KV error codes.
 const (
-	CodeIncompatibleDBFormat terror.ErrCode = 1
-	CodeNoDataForHandle      terror.ErrCode = 2
-	CodeKeyExists            terror.ErrCode = 3
+	codeClosed                     terror.ErrCode = 1
+	codeNotExist                                  = 2
+	codeConditionNotMatch                         = 3
+	codeLockConflict                              = 4
+	codeLazyConditionPairsNotMatch                = 5
+	codeRetryable                                 = 6
+	codeCantSetNilValue                           = 7
+	codeInvalidTxn                                = 8
+	codeNotCommitted                              = 9
+	codeNotImplemented                            = 10
+	codeTxnTooLarge                               = 11
+	codeEntryTooLarge                             = 12
+
+	codeKeyExists = 1062
 )
 
 var (
 	// ErrClosed is used when close an already closed txn.
-	ErrClosed = errors.New("Error: Transaction already closed")
+	ErrClosed = terror.ClassKV.New(codeClosed, "Error: Transaction already closed")
 	// ErrNotExist is used when try to get an entry with an unexist key from KV store.
-	ErrNotExist = errors.New("Error: key not exist")
+	ErrNotExist = terror.ClassKV.New(codeNotExist, "Error: key not exist")
 	// ErrConditionNotMatch is used when condition is not met.
-	ErrConditionNotMatch = errors.New("Error: Condition not match")
+	ErrConditionNotMatch = terror.ClassKV.New(codeConditionNotMatch, "Error: Condition not match")
 	// ErrLockConflict is used when try to lock an already locked key.
-	ErrLockConflict = errors.New("Error: Lock conflict")
+	ErrLockConflict = terror.ClassKV.New(codeLockConflict, "Error: Lock conflict")
 	// ErrLazyConditionPairsNotMatch is used when value in store differs from expect pairs.
-	ErrLazyConditionPairsNotMatch = errors.New("Error: Lazy condition pairs not match")
+	ErrLazyConditionPairsNotMatch = terror.ClassKV.New(codeLazyConditionPairsNotMatch, "Error: Lazy condition pairs not match")
 	// ErrRetryable is used when KV store occurs RPC error or some other
 	// errors which SQL layer can safely retry.
-	ErrRetryable = errors.New("Error: KV error safe to retry")
+	ErrRetryable = terror.ClassKV.New(codeRetryable, "Error: KV error safe to retry")
 	// ErrCannotSetNilValue is the error when sets an empty value.
-	ErrCannotSetNilValue = errors.New("can not set nil value")
+	ErrCannotSetNilValue = terror.ClassKV.New(codeCantSetNilValue, "can not set nil value")
 	// ErrInvalidTxn is the error when commits or rollbacks in an invalid transaction.
-	ErrInvalidTxn = errors.New("invalid transaction")
+	ErrInvalidTxn = terror.ClassKV.New(codeInvalidTxn, "invalid transaction")
+	// ErrTxnTooLarge is the error when transaction is too large, lock time reached the maximum value.
+	ErrTxnTooLarge = terror.ClassKV.New(codeTxnTooLarge, "transaction is too large")
+	// ErrEntryTooLarge is the error when a key value entry is too large.
+	ErrEntryTooLarge = terror.ClassKV.New(codeEntryTooLarge, "entry is too large")
 
 	// ErrNotCommitted is the error returned by CommitVersion when this
 	// transaction is not committed.
-	ErrNotCommitted = errors.New("this transaction has not committed")
+	ErrNotCommitted = terror.ClassKV.New(codeNotCommitted, "this transaction has not committed")
 
 	// ErrKeyExists returns when key is already exist.
-	ErrKeyExists = terror.ClassKV.New(CodeKeyExists, "key already exist")
+	ErrKeyExists = terror.ClassKV.New(codeKeyExists, "key already exist")
+	// ErrNotImplemented returns when a function is not implemented yet.
+	ErrNotImplemented = terror.ClassKV.New(codeNotImplemented, "not implemented")
 )
 
 func init() {
 	kvMySQLErrCodes := map[terror.ErrCode]uint16{
-		CodeKeyExists: mysql.ErrDupEntry,
+		codeKeyExists:     mysql.ErrDupEntry,
+		codeEntryTooLarge: mysql.ErrTooBigRowsize,
+		codeTxnTooLarge:   mysql.ErrTxnTooLarge,
 	}
 	terror.ErrClassToMySQLCodes[terror.ClassKV] = kvMySQLErrCodes
 }
@@ -69,11 +86,10 @@ func IsRetryableError(err error) bool {
 		return false
 	}
 
-	if terror.ErrorEqual(err, ErrRetryable) ||
-		terror.ErrorEqual(err, ErrLockConflict) ||
-		terror.ErrorEqual(err, ErrConditionNotMatch) ||
-		terror.ErrorEqual(err, themis.ErrRetryable) ||
-		// HBase exception message will tell you if you should retry or not
+	if ErrRetryable.Equal(err) ||
+		ErrLockConflict.Equal(err) ||
+		ErrConditionNotMatch.Equal(err) ||
+		// TiKV exception message will tell you if you should retry or not
 		strings.Contains(err.Error(), "try again later") {
 		return true
 	}
@@ -83,7 +99,7 @@ func IsRetryableError(err error) bool {
 
 // IsErrNotFound checks if err is a kind of NotFound error.
 func IsErrNotFound(err error) bool {
-	if terror.ErrorEqual(err, ErrNotExist) {
+	if ErrNotExist.Equal(err) {
 		return true
 	}
 
