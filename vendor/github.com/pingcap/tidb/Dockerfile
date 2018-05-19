@@ -1,15 +1,24 @@
-FROM golang
+# Builder image
+FROM golang:1.9-alpine as builder
 
-VOLUME /opt
+RUN apk add --no-cache \
+    make \
+    git
 
-RUN apt-get update && apt-get install -y wget git make ; \
-        cd /opt ; \
-        export PATH=$GOROOT/bin:$GOPATH/bin:$PATH ; \
-        go get -d github.com/pingcap/tidb ; \
-        cd $GOPATH/src/github.com/pingcap/tidb ; \
-        make ; make server ; cp tidb-server/tidb-server /usr/bin/ 
+COPY . /go/src/github.com/pingcap/tidb
+
+WORKDIR /go/src/github.com/pingcap/tidb/
+
+RUN make
+
+# Executable image
+FROM scratch
+
+COPY --from=builder /go/src/github.com/pingcap/tidb/bin/tidb-server /tidb-server
+
+WORKDIR /
 
 EXPOSE 4000
 
-CMD ["/usr/bin/tidb-server"]
+ENTRYPOINT ["/tidb-server"]
 
