@@ -64,9 +64,6 @@ var (
 
 	// EnableSQLite3 use SQLite3
 	EnableSQLite3 bool
-
-	// EnableTiDB enable TiDB
-	EnableTiDB bool
 )
 
 func init() {
@@ -139,8 +136,6 @@ func LoadConfigs() {
 		setting.UseMySQL = true
 	case "postgres":
 		setting.UsePostgreSQL = true
-	case "tidb":
-		setting.UseTiDB = true
 	case "mssql":
 		setting.UseMSSQL = true
 	}
@@ -232,14 +227,6 @@ func getEngine() (*xorm.Engine, error) {
 			return nil, fmt.Errorf("Failed to create directories: %v", err)
 		}
 		connStr = fmt.Sprintf("file:%s?cache=shared&mode=rwc&_busy_timeout=%d", DbCfg.Path, DbCfg.Timeout)
-	case "tidb":
-		if !EnableTiDB {
-			return nil, errors.New("this binary version does not build support for TiDB")
-		}
-		if err := os.MkdirAll(path.Dir(DbCfg.Path), os.ModePerm); err != nil {
-			return nil, fmt.Errorf("Failed to create directories: %v", err)
-		}
-		connStr = "goleveldb://" + DbCfg.Path
 	default:
 		return nil, fmt.Errorf("Unknown database type: %s", DbCfg.Type)
 	}

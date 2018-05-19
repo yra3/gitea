@@ -73,7 +73,6 @@ Windows, on architectures like amd64, i386, ARM, PowerPC, and others.
         - PostgreSQL
         - SQLite3
         - MSSQL
-        - TiDB (experimental, not recommended)
     - Configuration file
         - [app.ini](https://github.com/go-gitea/gitea/blob/master/custom/conf/app.ini.sample)
     - Admin panel
@@ -279,7 +278,6 @@ Windows, on architectures like amd64, i386, ARM, PowerPC, and others.
   * [github.com/go-sql-driver/mysql](https://github.com/go-sql-driver/mysql)
   * [github.com/lib/pq](https://github.com/lib/pq)
   * [github.com/mattn/go-sqlite3](https://github.com/mattn/go-sqlite3)
-  * [github.com/pingcap/tidb](https://github.com/pingcap/tidb)
   * [github.com/denisenkom/go-mssqldb](https://github.com/denisenkom/go-mssqldb)
 
 ## Software and Service Support

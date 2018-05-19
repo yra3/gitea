@@ -239,7 +239,7 @@ func dropTableColumns(sess *xorm.Session, tableName string, columnNames ...strin
 	switch {
 	case setting.UseSQLite3:
 		log.Warn("Unable to drop columns in SQLite")
-	case setting.UseMySQL, setting.UseTiDB, setting.UsePostgreSQL:
+	case setting.UseMySQL, setting.UsePostgreSQL:
 		cols := ""
 		for _, col := range columnNames {
 			if cols != "" {

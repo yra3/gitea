@@ -64,7 +64,6 @@ Gitea的首要目标是创建一个极易安装，运行非常快速，安装和
   * [github.com/go-sql-driver/mysql](https://github.com/go-sql-driver/mysql)
   * [github.com/lib/pq](https://github.com/lib/pq)
   * [github.com/mattn/go-sqlite3](https://github.com/mattn/go-sqlite3)
-  * [github.com/pingcap/tidb](https://github.com/pingcap/tidb)
   * [github.com/denisenkom/go-mssqldb](https://github.com/denisenkom/go-mssqldb)
 
 ## 软件及服务支持

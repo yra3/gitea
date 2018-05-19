@@ -158,7 +158,6 @@ var (
 	UseMySQL      bool
 	UseMSSQL      bool
 	UsePostgreSQL bool
-	UseTiDB       bool
 	LogSQL        bool
 
 	// Indexer settings

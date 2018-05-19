@@ -361,33 +361,24 @@ function initInstall() {
 
     // Database type change detection.
     $("#db_type").change(function () {
-        var sqliteDefault = 'data/gitea.db';
-        var tidbDefault = 'data/gitea_tidb';
-
-        var dbType = $(this).val();
-        if (dbType === "SQLite3" || dbType === "TiDB") {
-            $('#sql_settings').hide();
-            $('#pgsql_settings').hide();
-            $('#sqlite_settings').show();
-
-            if (dbType === "SQLite3" && $('#db_path').val() == tidbDefault) {
-                $('#db_path').val(sqliteDefault);
-            } else if (dbType === "TiDB" && $('#db_path').val() == sqliteDefault) {
-                $('#db_path').val(tidbDefault);
-            }
-            return;
-        }
-
         var dbDefaults = {
             "MySQL": "127.0.0.1:3306",
             "PostgreSQL": "127.0.0.1:5432",
-            "MSSQL": "127.0.0.1:1433"
+            "MSSQL": "127.0.0.1:1433",
+            "SQLite3": "data/gitea.db",
         };
 
-        $('#sqlite_settings').hide();
-        $('#sql_settings').show();
+        var dbType = $(this).val();
+        if (dbType === "SQLite3") {
+            $('#sql_settings').hide();
+            $('#pgsql_settings').hide();
+            $('#sqlite_settings').show();
+        } else {
+            $('#sqlite_settings').hide();
+            $('#sql_settings').show();
+            $('#pgsql_settings').toggle(dbType === "PostgreSQL");
+        }
 
-        $('#pgsql_settings').toggle(dbType === "PostgreSQL");
         $.each(dbDefaults, function(type, defaultHost) {
             if ($('#db_host').val() == defaultHost) {
                 $('#db_host').val(dbDefaults[dbType]);
@@ -2201,7 +2192,7 @@ function initTopicbar() {
                     return
                 }
                 var topicArray = topics.split(",");
-                
+
                 var last = viewDiv.children("a").last();
                 for (var i=0;i < topicArray.length; i++) {
                     $('<div class="ui green basic label topic" style="cursor:pointer;">'+topicArray[i]+'</div>').insertBefore(last)

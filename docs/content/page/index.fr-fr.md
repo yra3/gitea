@@ -68,7 +68,6 @@ Le but de ce projet est de fournir de la manière la plus simple, la plus rapide
         - PostgreSQL
         - SQLite3
         - MSSQL
-        - [TiDB](https://github.com/pingcap/tidb) (expérimental)
     - Fichier de configuration
         - Voir [ici](https://github.com/go-gitea/gitea/blob/master/custom/conf/app.ini.sample)
     - Panel d'administration
@@ -271,7 +270,6 @@ Le but de ce projet est de fournir de la manière la plus simple, la plus rapide
   * [github.com/go-sql-driver/mysql](https://github.com/go-sql-driver/mysql)
   * [github.com/lib/pq](https://github.com/lib/pq)
   * [github.com/mattn/go-sqlite3](https://github.com/mattn/go-sqlite3)
-  * [github.com/pingcap/tidb](https://github.com/pingcap/tidb)
   * [github.com/denisenkom/go-mssqldb](https://github.com/denisenkom/go-mssqldb)
 
 ## Logiciels et services
