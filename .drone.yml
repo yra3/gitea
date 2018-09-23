@@ -161,8 +161,9 @@ pipeline:
   test-mssql-setup:
     image: microsoft/mssql-tools
     pull: true
+    group: test
     commands:
-      - sqlcmd -S mssql -U sa -P TestPassword! -Q "CREATE DATABASE testgitea"
+      - /opt/mssql-tools/bin/sqlcmd -S mssql -U sa -P TestPassword! -Q "CREATE DATABASE testgitea"
     when:
       event: [ push, tag, pull_request ]
       
