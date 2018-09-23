@@ -80,7 +80,7 @@ clean:
 		integrations*.test \
 		integrations/gitea-integration-pgsql/ integrations/gitea-integration-mysql/ integrations/gitea-integration-sqlite/ \
 		integrations/indexers-mysql/ integrations/indexers-pgsql integrations/indexers-sqlite \
-		integrations/mysql.ini integrations/pgsql.ini
+		integrations/mysql.ini integrations/mssql.ini integrations/pgsql.ini
 
 .PHONY: fmt
 fmt:
@@ -207,7 +207,7 @@ generate-ini:
 		-e 's|{{TEST_MSSQL_DBNAME}}|${TEST_MSSQL_DBNAME}|g' \
 		-e 's|{{TEST_MSSQL_USERNAME}}|${TEST_MSSQL_USERNAME}|g' \
 		-e 's|{{TEST_MSSQL_PASSWORD}}|${TEST_MSSQL_PASSWORD}|g' \
-			integrations/mysql.ini.tmpl > integrations/mysql.ini
+			integrations/mssql.ini.tmpl > integrations/mssql.ini
 	sed -e 's|{{TEST_PGSQL_HOST}}|${TEST_PGSQL_HOST}|g' \
 		-e 's|{{TEST_PGSQL_DBNAME}}|${TEST_PGSQL_DBNAME}|g' \
 		-e 's|{{TEST_PGSQL_USERNAME}}|${TEST_PGSQL_USERNAME}|g' \
