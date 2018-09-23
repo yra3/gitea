@@ -43,6 +43,8 @@ func TestMain(m *testing.M) {
 	var helper testfixtures.Helper
 	if setting.UseMySQL {
 		helper = &testfixtures.MySQL{}
+	} else if setting.UseMSSQL {
+		helper = &testfixtures.SQLServer{}
 	} else if setting.UsePostgreSQL {
 		helper = &testfixtures.PostgreSQL{}
 	} else if setting.UseSQLite3 {
