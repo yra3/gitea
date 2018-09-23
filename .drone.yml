@@ -333,6 +333,15 @@ services:
     when:
       event: [ push, tag, pull_request ]
 
+  mssql:
+    image: microsoft/mssql-server-linux:2017-GDR
+    environment:
+      - ACCEPT_EULA=Y
+      - SA_PASSWORD=TestPassword!
+      - MSSQL_PID=Developer
+    when:
+      event: [ push, tag, pull_request ]
+      
   pgsql:
     image: postgres:9.5
     environment:
