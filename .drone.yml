@@ -157,7 +157,15 @@ pipeline:
       - make test-mysql
     when:
       event: [ tag ]
-
+      
+  test-mssql-setup:
+    image: microsoft/mssql-tools
+    pull: true
+    commands:
+      - sqlcmd -S mssql -U sa -P TestPassword! -Q "CREATE DATABASE testgitea"
+    when:
+      event: [ push, tag, pull_request ]
+      
   test-mssql:
     image: golang:1.11
     pull: true
