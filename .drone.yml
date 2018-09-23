@@ -158,6 +158,20 @@ pipeline:
     when:
       event: [ tag ]
 
+  test-mssql:
+    image: golang:1.11
+    pull: true
+    group: test
+    environment:
+      TAGS: bindata
+      TEST_LDAP: "1"
+    commands:
+      - curl -s https://packagecloud.io/install/repositories/github/git-lfs/script.deb.sh | bash
+      - apt-get install -y git-lfs
+      - make test-mssql
+    when:
+      event: [ push, tag, pull_request ]
+
   test-pgsql:
     image: golang:1.11
     pull: true
