@@ -19,8 +19,8 @@ import (
 	"code.gitea.io/gitea/modules/util"
 
 	"github.com/Unknwon/com"
-	"github.com/keybase/go-crypto/openpgp"
-	"github.com/keybase/go-crypto/openpgp/armor"
+	"golang.org/x/crypto/openpgp/armor"
+	"golang.org/x/crypto
 )
 
 const (

@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"code.gitea.io/gitea/modules/util"
-	"github.com/keybase/go-crypto/openpgp"
+	"golang.org/x/crypto/openpgp"
 
 	"github.com/stretchr/testify/assert"
 )
