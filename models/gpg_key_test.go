@@ -5,11 +5,11 @@
 package models
 
 import (
-	"strings"
 	"testing"
 	"time"
 
 	"code.gitea.io/gitea/modules/util"
+	"github.com/keybase/go-crypto/openpgp"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -408,4 +408,11 @@ FkzJRllII58iAA==
 	assert.NoError(t, err)
 
 	assert.Equal(t, 1, len(ekey.Identities)) //Should not output the revoked uid
+
+	//Inspired from https://github.com/keybase/go-crypto/blob/master/openpgp/keys_test.go#L519
+	var identities []*openpgp.Identity
+	for _, identity := range ekey.Identities {
+		identities = append(identities, identity)
+	}
+	assert.Contains(t, identities[0].Name, "Alden Peeters <alden.peeters@") //Should not output the revoked uid
 }
