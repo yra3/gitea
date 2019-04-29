@@ -182,6 +182,8 @@ github.com/kevinburke/ssh_config v0.0.0-20180830205328-81db2a75821e h1:RgQk53JHp
 github.com/kevinburke/ssh_config v0.0.0-20180830205328-81db2a75821e/go.mod h1:CT57kijsi8u/K/BOFA39wgDQJ9CxiF4nAY/ojJ6r6mM=
 github.com/keybase/go-crypto v0.0.0-20170605145657-00ac4db533f6 h1:9mszGwKDxHEY2cy+9XxCQKWIfkGPSAEFrcN8ghzyAKg=
 github.com/keybase/go-crypto v0.0.0-20170605145657-00ac4db533f6/go.mod h1:ghbZscTyKdM07+Fw3KSi0hcJm+AlEUWj8QLlPtijN/M=
+github.com/keybase/go-crypto v0.0.0-20190416182011-b785b22cc757 h1:rHXu79NFmin5AvIe4JsnfCBGb1qAIlMTX0vnpVnDn7s=
+github.com/keybase/go-crypto v0.0.0-20190416182011-b785b22cc757/go.mod h1:ghbZscTyKdM07+Fw3KSi0hcJm+AlEUWj8QLlPtijN/M=
 github.com/kisielk/errcheck v1.1.0/go.mod h1:EZBBE59ingxPouuu3KfxchcWSUPOHkagtvWXihfKN4Q=
 github.com/kisielk/gotool v1.0.0/go.mod h1:XhKaO+MFFWcvkIS/tQcRk01m1F5IRFswLeQ+oQHNcck=
 github.com/klauspost/compress v0.0.0-20161025140425-8df558b6cb6f h1:tCnZKEmDovgV4jmsclh6CuKk9AMzTzyVWfejgkgccVg=

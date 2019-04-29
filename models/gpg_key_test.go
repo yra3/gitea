@@ -407,8 +407,5 @@ FkzJRllII58iAA==
 	ekey, err := checkArmoredGPGKeyString(testIssue6778)
 	assert.NoError(t, err)
 
-	for _, ident := range ekey.Identities {
-		email := strings.ToLower(strings.TrimSpace(ident.UserId.Email))
-		t.Logf("DEBUG: %s", email)
-	}
+	assert.Equal(t, 1, len(ekey.Identities)) //Should not output the revoked uid
 }
