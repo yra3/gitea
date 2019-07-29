@@ -20,7 +20,7 @@ import (
 func listMembers(ctx *context.APIContext, publicOnly bool) {
 	var members []*models.User
 	if publicOnly {
-		orgUsers, err := models.GetOrgUsersByOrgID(ctx.Org.Organization.ID)
+		orgUsers, err := models.GetOrgUsersByOrgID(ctx.Org.Organization.ID, 0)
 		if err != nil {
 			ctx.Error(500, "GetOrgUsersByOrgID", err)
 			return

@@ -66,7 +66,7 @@ var (
 	LabelTemplates []string
 
 	// ItemsPerPage maximum items per page in forks, watchers and stars of a repo
-	ItemsPerPage = 40
+	ItemsPerPage = 4
 )
 
 // loadRepoConfig loads the repository config

@@ -65,10 +65,26 @@ func (org *User) GetTeams() error {
 }
 
 // GetMembers returns all members of organization.
+// TODO repplace call to this methods with GetPaginatedMembers
 func (org *User) GetMembers() error {
-	ous, err := GetOrgUsersByOrgID(org.ID)
+	ous, err := GetOrgUsersByOrgID(org.ID, 0)
 	if err != nil {
 		return err
+	}
+
+	var ids = make([]int64, len(ous))
+	for i, ou := range ous {
+		ids[i] = ou.UID
+	}
+	org.Members, err = GetUsersByIDs(ids)
+	return err
+}
+
+// GetPaginatedMembers returns members of organization with pagination.
+func (org *User) GetPaginatedMembers(page int) (UserList, map[int64]bool, error) {
+	ous, err := GetOrgUsersByOrgID(org.ID, page)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	var ids = make([]int64, len(ous))
@@ -77,9 +93,8 @@ func (org *User) GetMembers() error {
 		ids[i] = ou.UID
 		idsIsPublic[ou.UID] = ou.IsPublic
 	}
-	org.MembersIsPublic = idsIsPublic
-	org.Members, err = GetUsersByIDs(ids)
-	return err
+	members, err := GetUsersByIDs(ids)
+	return members, idsIsPublic, err
 }
 
 // AddMember adds new member to organization.
@@ -436,16 +451,17 @@ func GetOrgUsersByUserID(uid int64, all bool) ([]*OrgUser, error) {
 }
 
 // GetOrgUsersByOrgID returns all organization-user relations by organization ID.
-func GetOrgUsersByOrgID(orgID int64) ([]*OrgUser, error) {
-	return getOrgUsersByOrgID(x, orgID)
+func GetOrgUsersByOrgID(orgID int64, page int) ([]*OrgUser, error) {
+	return getOrgUsersByOrgID(x, orgID, page)
 }
 
-func getOrgUsersByOrgID(e Engine, orgID int64) ([]*OrgUser, error) {
-	ous := make([]*OrgUser, 0, 10)
-	err := e.
-		Where("org_id=?", orgID).
-		Find(&ous)
-	return ous, err
+func getOrgUsersByOrgID(e Engine, orgID int64, page int) ([]*OrgUser, error) {
+	ous := make([]*OrgUser, 0, ItemsPerPage)
+	sess := e.Where("org_id=?", orgID)
+	if page > 0 {
+		sess = sess.Limit(ItemsPerPage, (page-1)*ItemsPerPage)
+	}
+	return ous, sess.Find(&ous)
 }
 
 // ChangeOrgUserStatus changes public or private membership status.

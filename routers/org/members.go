@@ -25,14 +25,30 @@ func Members(ctx *context.Context) {
 	ctx.Data["Title"] = org.FullName
 	ctx.Data["PageIsOrgMembers"] = true
 
+	//TODO cache this result like NumWatches (only here for testing purpose)
 	if err := org.GetMembers(); err != nil {
 		ctx.ServerError("GetMembers", err)
 		return
 	}
-	ctx.Data["Members"] = org.Members
-	ctx.Data["MembersIsPublicMember"] = org.MembersIsPublic
-	ctx.Data["MembersIsUserOrgOwner"] = org.Members.IsUserOrgOwner(org.ID)
-	ctx.Data["MembersTwoFaStatus"] = org.Members.GetTwoFaStatus()
+	total := len(org.Members)
+
+	page := ctx.QueryInt("page")
+	if page <= 0 {
+		page = 1
+	}
+	pager := context.NewPagination(total, models.ItemsPerPage, page, 5)
+	ctx.Data["Page"] = pager
+
+	members, membersPublicState, err := org.GetPaginatedMembers(pager.Paginater.Current())
+	if err != nil {
+		ctx.ServerError("GetPaginatedMembers", err)
+		return
+	}
+
+	ctx.Data["Members"] = members
+	ctx.Data["MembersIsPublicMember"] = membersPublicState
+	ctx.Data["MembersIsUserOrgOwner"] = members.IsUserOrgOwner(org.ID)
+	ctx.Data["MembersTwoFaStatus"] = members.GetTwoFaStatus()
 
 	ctx.HTML(200, tplMembers)
 }
