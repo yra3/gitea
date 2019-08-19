@@ -12,10 +12,14 @@ type Team struct {
 	Description  string        `json:"description"`
 	Organization *Organization `json:"organization"`
 	// enum: none,read,write,admin,owner
-	Permission string `json:"permission"`
-	// example: [repo.code,repo.issues,repo.ext_issues,repo.wiki,repo.pulls,repo.releases,repo.ext_wiki]
-	Units []string `json:"units"`
+	Permission string           `json:"permission"`
+	Units      []UnitTypeString `json:"units"`
 }
+
+// UnitTypeString a unit type string representation
+// swagger:model enum_type_one
+//   enum: repo.code,repo.issues,repo.ext_issues,repo.wiki,repo.pulls,repo.releases,repo.ext_wiki
+type UnitTypeString string
 
 // CreateTeamOption options for creating a team
 type CreateTeamOption struct {
@@ -23,9 +27,8 @@ type CreateTeamOption struct {
 	Name        string `json:"name" binding:"Required;AlphaDashDot;MaxSize(30)"`
 	Description string `json:"description" binding:"MaxSize(255)"`
 	// enum: read,write,admin
-	Permission string `json:"permission"`
-	// example: [repo.code,repo.issues,repo.ext_issues,repo.wiki,repo.pulls,repo.releases,repo.ext_wiki]
-	Units []string `json:"units"`
+	Permission string           `json:"permission"`
+	Units      []UnitTypeString `json:"units"`
 }
 
 // EditTeamOption options for editing a team
@@ -34,7 +37,6 @@ type EditTeamOption struct {
 	Name        string `json:"name" binding:"Required;AlphaDashDot;MaxSize(30)"`
 	Description string `json:"description" binding:"MaxSize(255)"`
 	// enum: read,write,admin
-	Permission string `json:"permission"`
-	// example: [repo.code,repo.issues,repo.ext_issues,repo.wiki,repo.pulls,repo.releases,repo.ext_wiki]
-	Units []string `json:"units"`
+	Permission string           `json:"permission"`
+	Units      []UnitTypeString `json:"units"`
 }

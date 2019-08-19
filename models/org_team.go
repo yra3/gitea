@@ -13,6 +13,7 @@ import (
 
 	"code.gitea.io/gitea/modules/log"
 	"code.gitea.io/gitea/modules/setting"
+	"code.gitea.io/gitea/modules/structs"
 
 	"github.com/go-xorm/xorm"
 )
@@ -59,9 +60,9 @@ func (t *Team) getUnits(e Engine) (err error) {
 }
 
 // GetUnitNames returns the team units names
-func (t *Team) GetUnitNames() (res []string) {
+func (t *Team) GetUnitNames() (res []structs.UnitTypeString) {
 	for _, u := range t.Units {
-		res = append(res, Units[u.Type].NameKey)
+		res = append(res, structs.UnitTypeString(Units[u.Type].NameKey))
 	}
 	return
 }

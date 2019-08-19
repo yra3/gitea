@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"code.gitea.io/gitea/modules/log"
+	"code.gitea.io/gitea/modules/structs"
 )
 
 // UnitType is Unit's Type
@@ -178,10 +179,10 @@ var (
 )
 
 // FindUnitTypes give the unit key name and return unit
-func FindUnitTypes(nameKeys ...string) (res []UnitType) {
+func FindUnitTypes(nameKeys ...structs.UnitTypeString) (res []UnitType) {
 	for _, key := range nameKeys {
 		for t, u := range Units {
-			if strings.EqualFold(key, u.NameKey) {
+			if strings.EqualFold(string(key), u.NameKey) {
 				res = append(res, t)
 				break
 			}

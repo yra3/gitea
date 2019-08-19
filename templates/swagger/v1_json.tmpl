@@ -7665,10 +7665,9 @@
         "units": {
           "type": "array",
           "items": {
-            "type": "string"
+            "$ref": "#/definitions/enum_type_one"
           },
-          "x-go-name": "Units",
-          "example": "[repo.code,repo.issues,repo.ext_issues,repo.wiki,repo.pulls,repo.releases,repo.ext_wiki]"
+          "x-go-name": "Units"
         }
       },
       "x-go-package": "code.gitea.io/gitea/modules/structs"
@@ -8191,10 +8190,9 @@
         "units": {
           "type": "array",
           "items": {
-            "type": "string"
+            "$ref": "#/definitions/enum_type_one"
           },
-          "x-go-name": "Units",
-          "example": "[repo.code,repo.issues,repo.ext_issues,repo.wiki,repo.pulls,repo.releases,repo.ext_wiki]"
+          "x-go-name": "Units"
         }
       },
       "x-go-package": "code.gitea.io/gitea/modules/structs"
@@ -9734,10 +9732,9 @@
         "units": {
           "type": "array",
           "items": {
-            "type": "string"
+            "$ref": "#/definitions/enum_type_one"
           },
-          "x-go-name": "Units",
-          "example": "[repo.code,repo.issues,repo.ext_issues,repo.wiki,repo.pulls,repo.releases,repo.ext_wiki]"
+          "x-go-name": "Units"
         }
       },
       "x-go-package": "code.gitea.io/gitea/modules/structs"
@@ -9926,6 +9923,12 @@
           "x-go-name": "URL"
         }
       },
+      "x-go-package": "code.gitea.io/gitea/modules/structs"
+    },
+    "enum_type_one": {
+      "description": "UnitTypeString a unit type string representation",
+      "type": "string",
+      "x-go-name": "UnitTypeString",
       "x-go-package": "code.gitea.io/gitea/modules/structs"
     }
   },
