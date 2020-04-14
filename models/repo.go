@@ -190,6 +190,7 @@ type Repository struct {
 	IsFsckEnabled                   bool               `xorm:"NOT NULL DEFAULT true"`
 	CloseIssuesViaCommitInAnyBranch bool               `xorm:"NOT NULL DEFAULT false"`
 	Topics                          []string           `xorm:"TEXT JSON"`
+	Contributors                    int64              `xorm:"NOT NULL DEFAULT 0"`
 
 	// Avatar: ID(10-20)-md5(32) - must fit into 64 symbols
 	Avatar string `xorm:"VARCHAR(64)"`
@@ -378,6 +379,7 @@ func (repo *Repository) innerAPIFormat(e Engine, mode AccessMode, isParent bool)
 		OpenIssues:                repo.NumOpenIssues,
 		OpenPulls:                 repo.NumOpenPulls,
 		Releases:                  int(numReleases),
+		Contributors:              int(repo.Contributors),
 		DefaultBranch:             repo.DefaultBranch,
 		Created:                   repo.CreatedUnix.AsTime(),
 		Updated:                   repo.UpdatedUnix.AsTime(),
@@ -775,6 +777,15 @@ func (repo *Repository) IsOwnedBy(userID int64) bool {
 	return repo.OwnerID == userID
 }
 
+func (repo *Repository) updateContributors(e Engine) error {
+	return nil //TODO
+}
+
+// UpdateContributors updates the repository contributors list
+func (repo *Repository) UpdateContributors(ctx DBContext) error {
+	return repo.updateSize(ctx.e)
+}
+
 func (repo *Repository) updateSize(e Engine) error {
 	size, err := util.GetDirectorySize(repo.RepoPath())
 	if err != nil {
@@ -789,6 +800,19 @@ func (repo *Repository) updateSize(e Engine) error {
 // UpdateSize updates the repository size, calculating it using util.GetDirectorySize
 func (repo *Repository) UpdateSize(ctx DBContext) error {
 	return repo.updateSize(ctx.e)
+}
+
+func (repo *Repository) updateMetas(e Engine) error {
+	err := updateSize(e)
+	if err != nil {
+		return err
+	}
+	return updateContributors(e)
+}
+
+// UpdateSize updates the repository size and contributors list
+func (repo *Repository) UpdateMetas(ctx DBContext) error {
+	return repo.updateMetas(ctx.e)
 }
 
 // CanUserFork returns true if specified user can fork repository.
