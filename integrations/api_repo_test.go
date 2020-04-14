@@ -209,31 +209,32 @@ func getRepo(t *testing.T, repoID int64) *models.Repository {
 func TestAPIViewRepo(t *testing.T) {
 	defer prepareTestEnv(t)()
 
+	testCases := []struct {
+		repoPath, repoName                                                                        string
+		expectedStatus, repoID, nbReleases, nbOpenIssues, nbOpenPulls, nbForks, nbStars, repoSize int
+	}{
+		{repoPath: "user2/repo1", repoName: "repo1", expectedStatus: http.StatusOK, repoID: 1, nbReleases: 1, nbOpenIssues: 1, nbOpenPulls: 3, nbForks: 0, nbStars: 0, repoSize: 0},
+		{repoPath: "user12/repo10", repoName: "repo10", expectedStatus: http.StatusOK, repoID: 10, nbReleases: 0, nbOpenIssues: 0, nbOpenPulls: 1, nbForks: 1, nbStars: 0, repoSize: 0},
+		{repoPath: "user5/repo4", repoName: "repo4", expectedStatus: http.StatusOK, repoID: 4, nbReleases: 0, nbOpenIssues: 0, nbOpenPulls: 0, nbForks: 0, nbStars: 1, repoSize: 0},
+	}
+
 	var repo api.Repository
+	for _, testCase := range testCases {
+		t.Run(testCase.repoPath, func(t *testing.T) {
+			req := NewRequest(t, "GET", "/api/v1/repos/"+testCase.repoPath)
+			resp := MakeRequest(t, req, testCase.expectedStatus)
+			DecodeJSON(t, resp, &repo)
+			assert.EqualValues(t, testCase.repoID, repo.ID)
+			assert.EqualValues(t, testCase.repoName, repo.Name)
+			assert.EqualValues(t, testCase.nbReleases, repo.Releases)
+			assert.EqualValues(t, testCase.nbOpenIssues, repo.OpenIssues)
+			assert.EqualValues(t, testCase.nbOpenPulls, repo.OpenPulls)
+			assert.EqualValues(t, testCase.nbForks, repo.Forks)
+			assert.EqualValues(t, testCase.nbStars, repo.Stars)
+			assert.EqualValues(t, testCase.repoSize, repo.Size)
+		})
+	}
 
-	req := NewRequest(t, "GET", "/api/v1/repos/user2/repo1")
-	resp := MakeRequest(t, req, http.StatusOK)
-	DecodeJSON(t, resp, &repo)
-	assert.EqualValues(t, 1, repo.ID)
-	assert.EqualValues(t, "repo1", repo.Name)
-	assert.EqualValues(t, 1, repo.Releases)
-	assert.EqualValues(t, 1, repo.OpenIssues)
-	assert.EqualValues(t, 3, repo.OpenPulls)
-
-	req = NewRequest(t, "GET", "/api/v1/repos/user12/repo10")
-	resp = MakeRequest(t, req, http.StatusOK)
-	DecodeJSON(t, resp, &repo)
-	assert.EqualValues(t, 10, repo.ID)
-	assert.EqualValues(t, "repo10", repo.Name)
-	assert.EqualValues(t, 1, repo.OpenPulls)
-	assert.EqualValues(t, 1, repo.Forks)
-
-	req = NewRequest(t, "GET", "/api/v1/repos/user5/repo4")
-	resp = MakeRequest(t, req, http.StatusOK)
-	DecodeJSON(t, resp, &repo)
-	assert.EqualValues(t, 4, repo.ID)
-	assert.EqualValues(t, "repo4", repo.Name)
-	assert.EqualValues(t, 1, repo.Stars)
 }
 
 func TestAPIOrgRepos(t *testing.T) {
