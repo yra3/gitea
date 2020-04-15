@@ -34,6 +34,9 @@ import (
 	"code.gitea.io/gitea/modules/timeutil"
 	"code.gitea.io/gitea/modules/util"
 
+	"github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/unknwon/com"
 	"xorm.io/builder"
 )
@@ -778,7 +781,27 @@ func (repo *Repository) IsOwnedBy(userID int64) bool {
 }
 
 func (repo *Repository) updateContributors(e Engine) error {
-	return nil //TODO
+	r, err := git.PlainOpen(repo.RepoPath()) //TODO move in separate func
+	if err != nil {
+		return fmt.Errorf("updateContributors: %v", err)
+	}
+	cIter, err := r.Log(&LogOptions{})
+	if err != nil {
+		return fmt.Errorf("updateContributors: %v", err)
+	}
+
+	authors := make([]object.Signature)
+	err = cIter.ForEach(func(c *object.Commit) error {
+		authors = append(authors, c.Author) //TODO Uniq entries
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("updateContributors: %v", err)
+	}
+
+	repo.Contributors = len(authors)
+	_, err = e.ID(repo.ID).Cols("contributors").Update(repo)
+	return err
 }
 
 // UpdateContributors updates the repository contributors list
