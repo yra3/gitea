@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
-	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -30,6 +29,7 @@ import (
 	"code.gitea.io/gitea/modules/setting"
 	"code.gitea.io/gitea/routers"
 	"code.gitea.io/gitea/routers/routes"
+	"xorm.io/xorm"
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
@@ -37,7 +37,6 @@ import (
 	context2 "github.com/gorilla/context"
 	"github.com/unknwon/com"
 	"gopkg.in/testfixtures.v2"
-	"xorm.io/xorm"
 )
 
 var codeFilePath = "contrib/pr/checkout.go"
@@ -82,26 +81,24 @@ func runPR() {
 	log.Printf("[PR] Loading fixtures data ...\n")
 	db := setting.Cfg.Section("database")
 	db.NewKey("DB_TYPE", "sqlite3")
-	db.NewKey("PATH", ":memory:")
+	db.NewKey("PATH", path.Join(setting.AppDataPath+"gitea.db"))
+	setting.InitDBConfig()
 
-	setting.Database.LogSQL = true
-	//x, err = xorm.NewEngine("sqlite3", "file::memory:?cache=shared")
-
-	var helper testfixtures.Helper = &testfixtures.SQLite{}
-	models.NewEngine(context.Background(), func(_ *xorm.Engine) error {
-		return nil
-	})
-	models.HasEngine = true
-	//x.ShowSQL(true)
-	err = models.InitFixtures(
-		helper,
-		path.Join(curDir, "models/fixtures/"),
-	)
-	if err != nil {
-		fmt.Printf("Error initializing test database: %v\n", err)
+	if err = models.NewEngine(context.Background(), func(_ *xorm.Engine) error { return nil }); err != nil {
+		fmt.Printf("Error initializing database: %v\n", err)
 		os.Exit(1)
 	}
-	models.LoadFixtures()
+	models.HasEngine = true
+
+	if err = models.InitFixtures(&testfixtures.SQLite{}, path.Join(curDir, "models/fixtures/")); err != nil {
+		fmt.Printf("Error initializing fixtures: %v\n", err)
+		os.Exit(1)
+	}
+
+	if err = models.LoadFixtures(); err != nil {
+		fmt.Printf("Error loading fixtures: %v\n", err)
+		os.Exit(1)
+	}
 	os.RemoveAll(setting.RepoRootPath)
 	os.RemoveAll(models.LocalCopyPath())
 	com.CopyDir(path.Join(curDir, "integrations/gitea-repositories-meta"), setting.RepoRootPath)
@@ -132,9 +129,10 @@ func runPR() {
 	*/
 
 	//Start the server
-	http.ListenAndServe(":8080", context2.ClearHandler(m))
-
+	graceful.GetManager().InformCleanup()
+	graceful.HTTPListenAndServe("tcp", ":8080", context2.ClearHandler(m))
 	log.Printf("[PR] Cleaning up ...\n")
+	<-graceful.GetManager().Done()
 	/*
 		if err = os.RemoveAll(setting.Indexer.IssuePath); err != nil {
 			fmt.Printf("os.RemoveAll: %v\n", err)
@@ -248,6 +246,7 @@ func main() {
 	//Start with integration test
 	runCmd("go", "run", "-mod", "vendor", "-tags", "sqlite sqlite_unlock_notify", codeFilePath, "-run")
 }
+
 func runCmd(cmd ...string) {
 	log.Printf("Executing : %s ...\n", cmd)
 	c := exec.Command(cmd[0], cmd[1:]...)
