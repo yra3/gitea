@@ -1022,6 +1022,9 @@ func RegisterRoutes(m *macaron.Macaron) {
 			})
 		}, repo.MustAllowPulls)
 
+		//TODO serve hash file from lru cache (3 minute)
+		//TODO serve/proxy public url from RAW_DOMAIN without context
+
 		m.Group("/media", func() {
 			m.Get("/branch/*", context.RepoRefByType(context.RepoRefBranch), repo.SingleDownloadOrLFS)
 			m.Get("/tag/*", context.RepoRefByType(context.RepoRefTag), repo.SingleDownloadOrLFS)

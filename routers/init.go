@@ -125,6 +125,8 @@ func PreInstallInit(ctx context.Context) bool {
 		log.Trace("AppWorkPath: %s", setting.AppWorkPath)
 		log.Trace("Custom path: %s", setting.CustomPath)
 		log.Trace("Log path: %s", setting.LogRootPath)
+		log.Trace("Raw rendering: %s", setting.RawRenderingState())
+
 		log.Trace("Preparing to run install page")
 		InitLocales()
 		if setting.EnableSQLite3 {
@@ -165,6 +167,7 @@ func GlobalInit(ctx context.Context) {
 	log.Trace("AppWorkPath: %s", setting.AppWorkPath)
 	log.Trace("Custom path: %s", setting.CustomPath)
 	log.Trace("Log path: %s", setting.LogRootPath)
+	log.Trace("Raw rendering: %s", setting.RawRenderingState())
 
 	// Setup i18n
 	InitLocales()

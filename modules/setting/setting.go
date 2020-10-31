@@ -157,6 +157,19 @@ var (
 	PasswordHashAlgo                   string
 	PasswordCheckPwn                   bool
 
+	// Raw settings
+	Raw = struct {
+		Domain      string
+		URL         string
+		Enabled     bool
+		MaxFileSize int64
+	}{
+		Domain:      "",
+		URL:         "",
+		Enabled:     false,
+		MaxFileSize: 8388608,
+	}
+
 	// UI settings
 	UI = struct {
 		ExplorePagingNum      int
@@ -579,6 +592,35 @@ func NewContext() {
 	if err != nil {
 		log.Fatal("Invalid ROOT_URL '%s': %s", AppURL, err)
 	}
+
+	Raw.Domain = Cfg.Section("raw").Key("DOMAIN").MustString("")
+	Raw.MaxFileSize = Cfg.Section("raw").Key("MAX_FILE_SIZE").MustInt64(1048576)
+	defaultRawURL := string(Protocol) + "://" + Raw.Domain
+	if (Protocol == HTTP && HTTPPort != "80") || (Protocol == HTTPS && HTTPPort != "443") {
+		defaultAppURL += ":" + HTTPPort
+	}
+
+	Raw.URL = Cfg.Section("raw").Key("ROOT_URL").MustString(defaultRawURL)
+	Raw.URL = strings.TrimSuffix(Raw.URL, "/") + "/"
+
+	// Check if raw url is valid.
+	rawURL, err := url.Parse(Raw.URL)
+	if rawURL.Hostname() != "" {
+		if err != nil || isCookieSameDomain(appURL, rawURL) {
+			log.Warn("Invalid RAW_ROOT_URL (disabling unsafe raw rendering)'%s': %s", Raw.URL, err)
+		} else {
+			if Raw.Domain == "" {
+				Raw.Domain = rawURL.Hostname() //Backport domain
+			}
+			Raw.Domain = strings.ToLower(Raw.Domain)
+			if Raw.Domain == strings.ToLower(rawURL.Hostname()) {
+				Raw.Enabled = true
+			} else {
+				log.Warn("RAW_ROOT_URL not corresponding RAW_DOMAIN (disabling unsafe raw rendering)'%s': %s", strings.ToLower(rawURL.Hostname()), Raw.Domain)
+			}
+		}
+	}
+
 	// Suburl should start with '/' and end without '/', such as '/{subpath}'.
 	// This value is empty if site does not have sub-url.
 	AppSubURL = strings.TrimSuffix(appURL.Path, "/")
@@ -1038,4 +1080,12 @@ func NewServices() {
 	newTaskService()
 	NewQueueService()
 	newProject()
+}
+
+//RawRenderingState return a textual representation of raw rendering state
+func RawRenderingState() string {
+	if Raw.Enabled {
+		return "enabled"
+	}
+	return "disabled"
 }

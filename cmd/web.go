@@ -74,10 +74,10 @@ func runHTTPRedirector() {
 	}
 }
 
-func runLetsEncrypt(listenAddr, domain, directory, email string, m http.Handler) error {
+func runLetsEncrypt(listenAddr string, domains []string, directory, email string, m http.Handler) error {
 	certManager := autocert.Manager{
 		Prompt:     autocert.AcceptTOS,
-		HostPolicy: autocert.HostWhitelist(domain),
+		HostPolicy: autocert.HostWhitelist(domains...),
 		Cache:      autocert.DirCache(directory),
 		Email:      email,
 	}
@@ -232,7 +232,11 @@ func listen(m *macaron.Macaron, handleRedirector bool) error {
 		err = runHTTP("tcp", listenAddr, context2.ClearHandler(m))
 	case setting.HTTPS:
 		if setting.EnableLetsEncrypt {
-			err = runLetsEncrypt(listenAddr, setting.Domain, setting.LetsEncryptDirectory, setting.LetsEncryptEmail, context2.ClearHandler(m))
+			domains := []string{setting.Domain}
+			if setting.Raw.Enabled {
+				domains = append(domains, setting.Raw.Domain)
+			}
+			err = runLetsEncrypt(listenAddr, domains, setting.LetsEncryptDirectory, setting.LetsEncryptEmail, context2.ClearHandler(m))
 			break
 		}
 		if handleRedirector {

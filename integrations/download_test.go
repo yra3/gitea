@@ -34,3 +34,8 @@ func TestDownloadByIDMedia(t *testing.T) {
 
 	assert.Equal(t, "# repo1\n\nDescription for repo1", resp.Body.String())
 }
+
+//TODO parse config and activate RAW_DOMAIN only if on an other domain
+//TODO when RAW_DOMAIN is activated
+//TODO test svg with RAW_DOMAIN activated or not
+//TODO same for rendering of markdown if RAW_DOMAIN is activated

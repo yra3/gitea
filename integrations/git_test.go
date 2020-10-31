@@ -268,6 +268,11 @@ func mediaTest(t *testing.T, ctx *APITestContext, little, big, littleLFS, bigLFS
 	})
 }
 
+//TODO parse config and activate RAW_DOMAIN only if on an other domain
+//TODO when RAW_DOMAIN is activated
+//TODO test svg with RAW_DOMAIN activated or not
+//TODO same for rendering of markdown if RAW_DOMAIN is activated
+
 func lockTest(t *testing.T, repoPath string) {
 	lockFileTest(t, "README.md", repoPath)
 }

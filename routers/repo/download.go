@@ -17,6 +17,7 @@ import (
 	"code.gitea.io/gitea/modules/git"
 	"code.gitea.io/gitea/modules/lfs"
 	"code.gitea.io/gitea/modules/log"
+	"code.gitea.io/gitea/modules/setting"
 )
 
 // ServeData download file from io.Reader
@@ -30,11 +31,19 @@ func ServeData(ctx *context.Context, name string, reader io.Reader) error {
 		buf = buf[:n]
 	}
 
-	ctx.Resp.Header().Set("Cache-Control", "public,max-age=86400")
 	name = path.Base(name)
 
 	// Google Chrome dislike commas in filenames, so let's change it to a space
 	name = strings.ReplaceAll(name, ",", " ")
+
+	if setting.Raw.Enabled && setting.Raw.MaxFileSize >= int64(len(buf)) {
+		if path.Ext(name) == ".svg" { //TODO ad more
+
+		}
+		//TODO add limit size on binary and lru cache to prevent memory overflow
+		//TODO Detect svg before utf8 text
+		//TODO redirect and store in LRU cache of 1 minutes to prepare RAW_DOMAIN
+	}
 
 	if base.IsTextFile(buf) || ctx.QueryBool("render") {
 		cs, err := charset.DetectEncoding(buf)
@@ -51,6 +60,7 @@ func ServeData(ctx *context.Context, name string, reader io.Reader) error {
 		ctx.Resp.Header().Set("Access-Control-Expose-Headers", "Content-Disposition")
 	}
 
+	ctx.Resp.Header().Set("Cache-Control", "public,max-age=86400")
 	_, err = ctx.Resp.Write(buf)
 	if err != nil {
 		return err
@@ -61,6 +71,7 @@ func ServeData(ctx *context.Context, name string, reader io.Reader) error {
 
 // ServeBlob download a git.Blob
 func ServeBlob(ctx *context.Context, blob *git.Blob) error {
+	//TODO redirect t RAW_DOMAIN
 	dataRc, err := blob.DataAsync()
 	if err != nil {
 		return err
@@ -76,6 +87,7 @@ func ServeBlob(ctx *context.Context, blob *git.Blob) error {
 
 // ServeBlobOrLFS download a git.Blob redirecting to LFS if necessary
 func ServeBlobOrLFS(ctx *context.Context, blob *git.Blob) error {
+	//TODO redirect t RAW_DOMAIN
 	dataRc, err := blob.DataAsync()
 	if err != nil {
 		return err
