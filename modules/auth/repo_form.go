@@ -48,6 +48,7 @@ type CreateRepoForm struct {
 	Avatar       bool
 	Labels       bool
 	TrustModel   string
+	SizeLimit    int64
 }
 
 // Validate validates the fields
@@ -123,6 +124,7 @@ type RepoSettingForm struct {
 	Private        bool
 	Template       bool
 	EnablePrune    bool
+	RepoSizeLimit  int64
 
 	// Advanced settings
 	EnableWiki                       bool
