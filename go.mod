@@ -89,7 +89,7 @@ require (
 	github.com/philhofer/fwd v1.1.0 // indirect
 	github.com/pierrec/lz4/v4 v4.1.1 // indirect
 	github.com/pkg/errors v0.9.1
-	github.com/pquerna/otp v1.2.0
+	github.com/pquerna/otp v1.3.0
 	github.com/prometheus/client_golang v1.8.0
 	github.com/quasoft/websspi v1.0.0
 	github.com/remyoudompheng/bigfft v0.0.0-20190321074620-2f0d2b0e0001 // indirect
