@@ -22,7 +22,7 @@ require (
 	github.com/alecthomas/chroma v0.8.1
 	github.com/andybalholm/brotli v1.0.1 // indirect
 	github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be // indirect
-	github.com/blevesearch/bleve v1.0.12
+	github.com/blevesearch/bleve v1.0.14
 	github.com/cpuguy83/go-md2man/v2 v2.0.0 // indirect
 	github.com/cznic/b v0.0.0-20181122101859-a26611c4d92d // indirect
 	github.com/cznic/mathutil v0.0.0-20181122101859-297441e03548 // indirect
@@ -34,9 +34,7 @@ require (
 	github.com/editorconfig/editorconfig-core-go/v2 v2.3.8
 	github.com/emirpasic/gods v1.12.0
 	github.com/ethantkoenig/rupture v0.0.0-20181029165146-c3b3b810dc77
-	github.com/facebookgo/ensure v0.0.0-20160127193407-b4ab57deab51 // indirect
 	github.com/facebookgo/stack v0.0.0-20160209184415-751773369052 // indirect
-	github.com/facebookgo/subset v0.0.0-20150612182917-8dac2c3c4870 // indirect
 	github.com/gliderlabs/ssh v0.3.1
 	github.com/glycerine/go-unsnap-stream v0.0.0-20190901134440-81cf024a9e0a // indirect
 	github.com/go-chi/chi v1.5.0
@@ -93,7 +91,6 @@ require (
 	github.com/pquerna/otp v1.2.0
 	github.com/prometheus/client_golang v1.8.0
 	github.com/quasoft/websspi v1.0.0
-	github.com/remyoudompheng/bigfft v0.0.0-20190321074620-2f0d2b0e0001 // indirect
 	github.com/sergi/go-diff v1.1.0
 	github.com/shurcooL/httpfs v0.0.0-20190707220628-8d4bc4ba7749 // indirect
 	github.com/shurcooL/vfsgen v0.0.0-20200824052919-0d455de96546
@@ -101,7 +98,6 @@ require (
 	github.com/ssor/bom v0.0.0-20170718123548-6386211fdfcf // indirect
 	github.com/stretchr/testify v1.6.1
 	github.com/syndtr/goleveldb v1.0.0
-	github.com/tecbot/gorocksdb v0.0.0-20181010114359-8752a9433481 // indirect
 	github.com/tinylib/msgp v1.1.2 // indirect
 	github.com/tstranex/u2f v1.0.0
 	github.com/ulikunitz/xz v0.5.8 // indirect
