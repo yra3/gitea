@@ -1,0 +1,36 @@
+version: 2
+updates:
+- package-ecosystem: gomod
+  directory: "/"
+  schedule:
+    interval: daily
+  open-pull-requests-limit: 10
+  reviewers:
+  - sapk
+  ignore:
+  - dependency-name: github.com/klauspost/compress
+    versions:
+    - 1.11.12
+    - 1.11.13
+    - 1.11.7
+    - 1.11.8
+    - 1.11.9
+    - 1.12.1
+  - dependency-name: github.com/olivere/elastic/v7
+    versions:
+    - 7.0.22
+    - 7.0.23
+  - dependency-name: github.com/editorconfig/editorconfig-core-go/v2
+    versions:
+    - 2.3.9
+    - 2.4.0
+    - 2.4.1
+  - dependency-name: github.com/mattn/go-sqlite3
+    versions:
+    - 1.14.6
+  - dependency-name: github.com/markbates/goth
+    versions:
+    - 1.66.1
+  - dependency-name: github.com/alecthomas/chroma
+    versions:
+    - 0.8.2
