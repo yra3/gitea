@@ -76,7 +76,7 @@ func CreatePackageOrAddFileToExisting(pvci *PackageCreationInfo, pfci *PackageFi
 }
 
 func createPackageAndAddFile(pvci *PackageCreationInfo, pfci *PackageFileCreationInfo, allowDuplicate bool) (*packages_model.PackageVersion, *packages_model.PackageFile, error) {
-	ctx, committer, err := db.TxContext()
+	ctx, committer, err := db.TxContext(db.DefaultContext)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -108,12 +108,12 @@ func createPackageAndAddFile(pvci *PackageCreationInfo, pfci *PackageFileCreatio
 	}
 
 	if created {
-		pd, err := packages_model.GetPackageDescriptor(ctx, pv)
+		pd, err := packages_model.GetPackageDescriptor(db.DefaultContext, pv)
 		if err != nil {
 			return nil, nil, err
 		}
 
-		notification.NotifyPackageCreate(pvci.Creator, pd)
+		notification.NotifyPackageCreate(db.DefaultContext, pvci.Creator, pd)
 	}
 
 	return pv, pf, nil
@@ -190,7 +190,7 @@ func createPackageAndVersion(ctx context.Context, pvci *PackageCreationInfo, all
 
 // AddFileToExistingPackage adds a file to an existing package. If the package does not exist, ErrPackageNotExist is returned
 func AddFileToExistingPackage(pvi *PackageInfo, pfci *PackageFileCreationInfo) (*packages_model.PackageVersion, *packages_model.PackageFile, error) {
-	ctx, committer, err := db.TxContext()
+	ctx, committer, err := db.TxContext(db.DefaultContext)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -388,7 +388,7 @@ func RemovePackageVersionByNameAndVersion(doer *user_model.User, pvi *PackageInf
 
 // RemovePackageVersion deletes the package version and all associated files
 func RemovePackageVersion(doer *user_model.User, pv *packages_model.PackageVersion) error {
-	ctx, committer, err := db.TxContext()
+	ctx, committer, err := db.TxContext(db.DefaultContext)
 	if err != nil {
 		return err
 	}
@@ -409,7 +409,7 @@ func RemovePackageVersion(doer *user_model.User, pv *packages_model.PackageVersi
 		return err
 	}
 
-	notification.NotifyPackageDelete(doer, pd)
+	notification.NotifyPackageDelete(db.DefaultContext, doer, pd)
 
 	return nil
 }
@@ -444,7 +444,7 @@ func DeletePackageFile(ctx context.Context, pf *packages_model.PackageFile) erro
 
 // Cleanup removes expired package data
 func Cleanup(unused context.Context, olderThan time.Duration) error {
-	ctx, committer, err := db.TxContext()
+	ctx, committer, err := db.TxContext(db.DefaultContext)
 	if err != nil {
 		return err
 	}
