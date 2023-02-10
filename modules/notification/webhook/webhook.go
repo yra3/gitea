@@ -849,3 +849,15 @@ func notifyPackage(ctx context.Context, sender *user_model.User, pd *packages_mo
 		log.Error("PrepareWebhooks: %v", err)
 	}
 }
+
+func (m *webhookNotifier) NotifyRenameRepository(ctx context.Context, doer *user_model.User, repo *repo_model.Repository, oldOwnerName string) {
+	if err := webhook_services.PrepareWebhooks(ctx, webhook_services.EventSource{Repository: repo}, webhook.HookEventRepository, &api.RenamePayload{
+		Action:     api.HookRepoRenamed,
+		Before:     oldOwnerName,
+		After:      repo.Name,
+		Repository: convert.ToRepo(ctx, repo, perm.AccessModeNone),
+		Sender:     convert.ToUser(doer, nil),
+	}); err != nil {
+		log.Error("PrepareWebhooks: %v", err)
+	}
+}

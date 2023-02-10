@@ -486,3 +486,22 @@ type PackagePayload struct {
 func (p *PackagePayload) JSONPayload() ([]byte, error) {
 	return json.MarshalIndent(p, "", "  ")
 }
+
+const (
+	// HookRepoRenamed renamed
+	HookRepoRenamed HookRepoAction = "renamed"
+)
+
+// RenamePayload represents rename payload
+type RenamePayload struct {
+	Action     HookRepoAction `json:"action"`
+	Before     string         `json:"before"`
+	After      string         `json:"after"`
+	Repository *Repository    `json:"repository"`
+	Sender     *User          `json:"sender"`
+}
+
+// JSONPayload JSON representation of the payload
+func (p *RenamePayload) JSONPayload() ([]byte, error) {
+	return json.MarshalIndent(p, "", " ")
+}
