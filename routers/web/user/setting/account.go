@@ -247,7 +247,9 @@ func DeleteAccount(ctx *context.Context) {
 		}
 		return
 	}
-
+	if ctx.Doer.IsAdmin == false {
+		return
+	}
 	if err := user.DeleteUser(ctx, ctx.Doer, false); err != nil {
 		switch {
 		case models.IsErrUserOwnRepos(err):
